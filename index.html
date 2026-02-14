@@ -1,223 +1,420 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TaskWeb - Collaborative Kanban</title>
+    <title>TaskWeb - Modern Collaborative Kanban</title>
     <link rel="stylesheet" href="style.css">
-    <link rel="icon" href="icon.png" type="image/png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
-        href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Poppins:wght@400;500;600&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
         rel="stylesheet">
+    <script type="importmap">
+    {
+        "imports": {
+            "sortablejs": "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/modular/sortable.complete.esm.js"
+        }
+    }
+    </script>
 </head>
 
 <body>
-    <div class="app-container">
-        <aside class="sidebar">
-            <div class="logo">
-                <span class="logo-icon">&#9733;</span>
-                <span class="logo-text">TaskWeb</span>
+    <div id="app" class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar glass-panel" id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <div class="logo-icon">
+                        <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                            <rect width="32" height="32" rx="8" fill="url(#logo-gradient)" />
+                            <path d="M8 16L14 22L24 10" stroke="white" stroke-width="3" stroke-linecap="round"
+                                stroke-linejoin="round" />
+                            <defs>
+                                <linearGradient id="logo-gradient" x1="0" y1="0" x2="32" y2="32">
+                                    <stop offset="0%" stop-color="#667eea" />
+                                    <stop offset="100%" stop-color="#764ba2" />
+                                </linearGradient>
+                            </defs>
+                        </svg>
+                    </div>
+                    <span class="logo-text">TaskWeb</span>
+                </div>
+                <button class="sidebar-close" id="sidebarClose">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12" />
+                    </svg>
+                </button>
             </div>
+
             <nav class="nav-menu">
-                <a href="#" id="dashboardViewBtn" class="nav-item active">
-                    <span class="nav-icon">&#8962;</span>
-                    <span class="nav-text">Dashboard</span>
-                </a>
-                <a href="#" id="kanbanViewBtn" class="nav-item">
-                    <span class="nav-icon">&#9776;</span>
-                    <span class="nav-text">Board</span>
-                </a>
+                <button class="nav-item active" data-view="dashboard">
+                    <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2">
+                        <rect x="3" y="3" width="7" height="7" rx="1" />
+                        <rect x="14" y="3" width="7" height="7" rx="1" />
+                        <rect x="14" y="14" width="7" height="7" rx="1" />
+                        <rect x="3" y="14" width="7" height="7" rx="1" />
+                    </svg>
+                    <span>Dashboard</span>
+                </button>
+                <button class="nav-item" data-view="board">
+                    <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2">
+                        <path d="M9 17V7M15 17V7M3 12h18" />
+                    </svg>
+                    <span>Board</span>
+                </button>
             </nav>
-            <div class="user-info">
-                <p>Your User ID:</p>
-                <p class="user-id-text" id="userIdText">Loading...</p>
-                <p>Current Board ID:</p>
-                <p class="user-id-text" id="boardIdText">N/A</p>
-                <!-- New: Display active users for collaborative boards -->
-                <p id="activeUsersLabel" style="display: none;">Active Users:</p>
-                <p class="user-id-text" id="activeUsersCount" style="display: none;">0</p>
-                <div class="user-info-actions">
-                    <button id="shareBoardBtn" class="secondary-btn">Share Board</button>
-                    <button id="openBoardSelectionBtn" class="secondary-btn">Select Board</button>
-                    <!-- New button for joining collaborative boards from solo view -->
-                    <button id="joinCollaborativeBoardShortcutBtn" class="secondary-btn" style="display: none; margin-top: 10px;">Join Collaborative Board</button>
+
+            <div class="sidebar-section">
+                <h4 class="section-title">Current Board</h4>
+                <div class="board-info glass-card">
+                    <div class="info-row">
+                        <span class="info-label">ID</span>
+                        <span class="info-value" id="boardIdDisplay">Loading...</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Type</span>
+                        <span class="info-value" id="boardTypeDisplay">-</span>
+                    </div>
+                    <div class="info-row" id="activeUsersRow" style="display: none;">
+                        <span class="info-label">Active</span>
+                        <div class="active-users">
+                            <span class="user-avatars" id="userAvatars"></span>
+                            <span class="user-count" id="activeUserCount">0</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="sidebar-actions">
+                <button class="action-btn primary" id="createTaskBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 5v14M5 12h14" />
+                    </svg>
+                    New Task
+                </button>
+                <button class="action-btn secondary" id="shareBoardBtn" style="display: none;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8M16 6l-4-4-4 4M12 2v13" />
+                    </svg>
+                    Share Board
+                </button>
+                <button class="action-btn secondary" id="manageBoardsBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 3h18v18H3zM9 3v18" />
+                    </svg>
+                    Manage Boards
+                </button>
+            </div>
+
+            <div class="user-profile">
+                <div class="user-avatar" id="userAvatar"></div>
+                <div class="user-details">
+                    <span class="user-name">Anonymous User</span>
+                    <span class="user-id" id="userIdDisplay">...</span>
                 </div>
             </div>
         </aside>
 
+        <!-- Overlay for mobile -->
+        <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+        <!-- Main Content -->
         <main class="main-content">
-            <header class="header">
-                <button class="menu-toggle" id="menuToggleBtn">&#9776;</button>
-                <h1 id="pageTitle">Dashboard Overview</h1>
-                <button id="openModalBtn" class="primary-btn">Create Task</button>
+            <header class="top-header glass-panel">
+                <button class="menu-toggle" id="menuToggle">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 12h18M3 6h18M3 18h18" />
+                    </svg>
+                </button>
+                <h1 class="page-title" id="pageTitle">Dashboard</h1>
+                <div class="header-actions" id="headerActions"></div>
             </header>
 
+            <!-- Dashboard View -->
             <section id="dashboardView" class="view-section active">
-                <div class="summary-grid">
-                    <div class="summary-card">
-                        <h3>Total Tasks</h3>
-                        <p class="count" id="totalCount">0</p>
-                    </div>
-                    <div class="summary-card">
-                        <h3>To Do</h3>
-                        <p class="count" id="todoCount">0</p>
-                    </div>
-                    <div class="summary-card">
-                        <h3>In Progress</h3>
-                        <p class="count" id="inProgressCount">0</p>
-                    </div>
-                    <div class="summary-card">
-                        <h3>Completed</h3>
-                        <p class="count" id="doneCount">0</p>
-                    </div>
-                    <div class="summary-card high-priority">
-                        <h3>High Priority</h3>
-                        <p class="count" id="highPriorityCount">0</p>
-                    </div>
-                    <div class="summary-card overdue">
-                        <h3>Overdue</h3>
-                        <p class="count" id="overdueCount">0</p>
-                    </div>
-                </div>
-
-                <div class="dashboard-details">
-                    <div class="progress-section">
-                        <h4>Completion Rate</h4>
-                        <div class="progress-bar-container">
-                            <div class="progress-bar" id="completionBar"></div>
+                <div class="dashboard-grid">
+                    <div class="stats-row">
+                        <div class="stat-card glass-card total">
+                            <div class="stat-icon">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" />
+                                </svg>
+                            </div>
+                            <div class="stat-info">
+                                <span class="stat-value" id="totalTasks">0</span>
+                                <span class="stat-label">Total Tasks</span>
+                            </div>
                         </div>
-                        <p class="progress-text" id="completionText">0% Completed</p>
+                        <div class="stat-card glass-card high-priority">
+                            <div class="stat-icon">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path
+                                        d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                </svg>
+                            </div>
+                            <div class="stat-info">
+                                <span class="stat-value" id="highPriorityTasks">0</span>
+                                <span class="stat-label">High Priority</span>
+                            </div>
+                        </div>
+                        <div class="stat-card glass-card overdue">
+                            <div class="stat-icon">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 6v6l4 2" />
+                                </svg>
+                            </div>
+                            <div class="stat-info">
+                                <span class="stat-value" id="overdueTasks">0</span>
+                                <span class="stat-label">Overdue</span>
+                            </div>
+                        </div>
+                        <div class="stat-card glass-card completed">
+                            <div class="stat-icon">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M22 11.08V12a10 10 0 11-5.93-9.14" />
+                                    <path d="M22 4L12 14.01l-3-3" />
+                                </svg>
+                            </div>
+                            <div class="stat-info">
+                                <span class="stat-value" id="completedTasks">0</span>
+                                <span class="stat-label">Completed</span>
+                            </div>
+                        </div>
                     </div>
 
-                    <div class="priority-chart-section">
-                        <h4>Tasks by Priority</h4>
-                        <div class="priority-chart-container">
-                            <div class="priority-bar high" id="highPriorityBar"></div>
-                            <div class="priority-bar medium" id="mediumPriorityBar"></div>
-                            <div class="priority-bar low" id="lowPriorityBar"></div>
+                    <div class="dashboard-charts">
+                        <div class="chart-container glass-panel">
+                            <h3>Tasks by Column</h3>
+                            <div class="column-chart" id="columnChart">
+                                <!-- Dynamic column breakdown -->
+                            </div>
                         </div>
-                        <div class="chart-legend">
-                            <span class="legend-item"><span class="legend-color high"></span>High</span>
-                            <span class="legend-item"><span class="legend-color medium"></span>Medium</span>
-                            <span class="legend-item"><span class="legend-color low"></span>Low</span>
+
+                        <div class="chart-container glass-panel">
+                            <h3>Priority Distribution</h3>
+                            <div class="priority-visualization">
+                                <div class="priority-bar-container">
+                                    <div class="priority-bar high" id="priorityHigh"></div>
+                                    <div class="priority-bar medium" id="priorityMedium"></div>
+                                    <div class="priority-bar low" id="priorityLow"></div>
+                                </div>
+                                <div class="priority-legend">
+                                    <div class="legend-item">
+                                        <span class="legend-dot high"></span>
+                                        <span>High</span>
+                                        <span class="legend-count" id="countHigh">0</span>
+                                    </div>
+                                    <div class="legend-item">
+                                        <span class="legend-dot medium"></span>
+                                        <span>Medium</span>
+                                        <span class="legend-count" id="countMedium">0</span>
+                                    </div>
+                                    <div class="legend-item">
+                                        <span class="legend-dot low"></span>
+                                        <span>Low</span>
+                                        <span class="legend-count" id="countLow">0</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="recent-tasks glass-panel">
+                        <h3>Recent Activity</h3>
+                        <div class="task-list" id="recentTasksList">
+                            <!-- Recent tasks populated dynamically -->
                         </div>
                     </div>
                 </div>
             </section>
 
-            <section id="kanbanView" class="view-section">
-                <div class="kanban-board">
-                    <div class="kanban-column" id="column-todo">
-                        <h3>To Do</h3>
-                        <div class="task-list-kanban" ondragover="dragOver(event)" ondrop="drop(event, 'todo')"></div>
-                    </div>
-                    <div class="kanban-column" id="column-inprogress">
-                        <h3>In Progress</h3>
-                        <div class="task-list-kanban" ondragover="dragOver(event)" ondrop="drop(event, 'inprogress')">
-                        </div>
-                    </div>
-                    <div class="kanban-column" id="column-done">
-                        <h3>Done</h3>
-                        <div class="task-list-kanban" ondragover="dragOver(event)" ondrop="drop(event, 'done')"></div>
-                    </div>
+            <!-- Board View -->
+            <section id="boardView" class="view-section">
+                <div class="board-container" id="boardContainer">
+                    <!-- Dynamic columns will be rendered here -->
                 </div>
+
+                <button class="add-list-btn glass-card" id="addListBtn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 5v14M5 12h14" />
+                    </svg>
+                    Add List
+                </button>
             </section>
         </main>
     </div>
 
-    <div class="overlay"></div>
+    <!-- Modals -->
 
-    <!-- Task Creation/Editing Modal -->
-    <div id="taskModal" class="modal">
-        <div class="modal-content">
-            <span class="close-btn">&#x2715;</span>
-            <h2 id="modalTitle">Create New Task</h2>
-            <!-- New: Task Locked Message -->
-            <p id="taskLockedMessage" class="task-locked-message" style="display: none;">This task is currently being edited by another user.</p>
-            <div class="form-group">
-                <label for="taskName">Task Name</label>
-                <input type="text" id="taskName" placeholder="e.g., Optimize API endpoints">
+    <!-- Task Modal -->
+    <div class="modal" id="taskModal">
+        <div class="modal-content glass-panel">
+            <div class="modal-header">
+                <h2 id="modalTitle">Create Task</h2>
+                <button class="modal-close" id="closeTaskModal">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12" />
+                    </svg>
+                </button>
             </div>
-            <div class="form-group">
-                <label for="taskDescription">Description</label>
-                <textarea rows="10" id="taskDescription"
-                    placeholder="Provide a detailed description of the task..."></textarea>
-            </div>
-            <div class="form-group priority-dropdown-container">
-                <label for="taskPriority">Priority</label>
-                <div class="priority-dropdown-display" id="priorityDropdownDisplay">
-                    <span id="selectedPriorityText">Low</span>
-                    <span class="dropdown-arrow">&#9660;</span>
+
+            <div class="modal-body">
+                <div class="lock-warning" id="lockWarning" style="display: none;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                        <path d="M7 11V7a5 5 0 0110 0v4" />
+                    </svg>
+                    <span>This task is being edited by another user</span>
                 </div>
-                <div class="priority-dropdown-menu" id="priorityDropdownMenu">
-                    <button class="priority-option" data-value="low">Low</button>
-                    <button class="priority-option" data-value="medium">Medium</button>
-                    <button class="priority-option" data-value="high">High</button>
+
+                <div class="form-group">
+                    <label for="taskTitle">Title</label>
+                    <input type="text" id="taskTitle" class="glass-input" placeholder="Enter task title">
+                </div>
+
+                <div class="form-group">
+                    <label for="taskDesc">Description</label>
+                    <textarea id="taskDesc" class="glass-input" rows="4" placeholder="Add a description..."></textarea>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="taskPriority">Priority</label>
+                        <div class="priority-select" id="prioritySelect">
+                            <button class="priority-option" data-value="low">Low</button>
+                            <button class="priority-option" data-value="medium">Medium</button>
+                            <button class="priority-option" data-value="high">High</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="taskDue">Due Date</label>
+                        <input type="date" id="taskDue" class="glass-input">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="taskColumn">Column</label>
+                    <select id="taskColumn" class="glass-input">
+                        <!-- Populated dynamically -->
+                    </select>
                 </div>
             </div>
-            <div class="form-group">
-                <label for="taskDueDate">Due Date</label>
-                <input type="date" id="taskDueDate">
+
+            <div class="modal-footer">
+                <button class="btn secondary" id="cancelTask">Cancel</button>
+                <button class="btn primary" id="saveTask">Save Task</button>
             </div>
-            <button id="saveTaskBtn" class="primary-btn">Save Task</button>
         </div>
     </div>
 
-    <!-- Board Creation/Joining Modal (Updated for Solo/Collaborative) -->
-    <!-- This modal remains unchanged as per user request -->
-    <div id="boardModal" class="modal">
-        <div class="modal-content">
-            <h2 id="boardModalTitle">Manage Boards</h2>
-            <p>Create a new board or join an existing one.</p>
-            <div class="modal-actions board-selection-actions">
-                <button id="createSoloBoardBtn" class="primary-btn">Create Solo Board</button>
-                <button id="createCollaborativeBoardBtn" class="primary-btn">Create Collaborative Board</button>
+    <!-- Board Management Modal -->
+    <div class="modal" id="boardModal">
+        <div class="modal-content glass-panel wide">
+            <div class="modal-header">
+                <h2>Manage Boards</h2>
+                <button class="modal-close" id="closeBoardModal">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12" />
+                    </svg>
+                </button>
             </div>
-            <hr class="modal-divider">
-            <div class="form-group">
-                <label for="joinBoardId">Join Existing Board</label>
-                <input type="text" id="joinBoardId" placeholder="Enter Board ID">
-            </div>
-            <button id="joinBoardBtn" class="secondary-btn">Join Board</button>
-        </div>
-    </div>
 
-    <!-- NEW: Join Collaborative Board Shortcut Modal -->
-    <div id="joinCollaborativeBoardModal" class="modal">
-        <div class="modal-content">
-            <span class="close-btn" id="closeJoinCollaborativeBoardModal">&times;</span>
-            <h2>Join Collaborative Board</h2>
-            <p>Enter the ID of the collaborative board you wish to join.</p>
-            <div class="form-group">
-                <label for="joinCollaborativeBoardIdInput">Board ID</label>
-                <input type="text" id="joinCollaborativeBoardIdInput" placeholder="Enter Board ID">
+            <div class="modal-body">
+                <div class="boards-section">
+                    <h3>Your Boards</h3>
+                    <div class="boards-grid" id="boardsGrid">
+                        <!-- Board cards rendered here -->
+                    </div>
+                </div>
+
+                <div class="create-section">
+                    <h3>Create or Join</h3>
+                    <div class="create-actions">
+                        <button class="create-btn solo" id="createSoloBtn">
+                            <div class="create-icon">👤</div>
+                            <span>New Solo Board</span>
+                            <small>Private workspace</small>
+                        </button>
+                        <button class="create-btn collaborative" id="createCollabBtn">
+                            <div class="create-icon">👥</div>
+                            <span>New Collaborative Board</span>
+                            <small>Share with team</small>
+                        </button>
+                    </div>
+
+                    <div class="join-section">
+                        <div class="input-group">
+                            <input type="text" id="joinBoardId" class="glass-input"
+                                placeholder="Enter Board ID to join...">
+                            <button class="btn primary" id="joinBoardBtn">Join</button>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <button id="joinCollaborativeBoardConfirmBtn" class="primary-btn">Join Board</button>
         </div>
     </div>
 
     <!-- Share Modal -->
-    <div id="shareModal" class="modal">
-        <div class="modal-content">
-            <span class="close-btn" id="closeShareModal">&times;</span>
-            <h2>Share this Board</h2>
-            <p>Share the Board ID or the link below with your collaborators.</p>
-            <div class="form-group">
-                <label for="shareableLink">Shareable Link</label>
-                <input type="text" id="shareableLink" readonly>
+    <div class="modal" id="shareModal">
+        <div class="modal-content glass-panel">
+            <div class="modal-header">
+                <h2>Share Board</h2>
+                <button class="modal-close" id="closeShareModal">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12" />
+                    </svg>
+                </button>
             </div>
-            <div class="form-group">
-                <label for="shareableBoardId">Board ID</label>
-                <input type="text" id="shareableBoardId" readonly>
+            <div class="modal-body">
+                <p class="share-text">Share this Board ID or link with your collaborators:</p>
+                <div class="share-field">
+                    <input type="text" id="shareLink" class="glass-input" readonly>
+                    <button class="btn icon" id="copyLinkBtn" title="Copy to clipboard">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                        </svg>
+                    </button>
+                </div>
+                <div class="share-field">
+                    <label>Board ID</label>
+                    <code id="shareBoardId" class="board-id-display"></code>
+                </div>
             </div>
-            <button id="copyLinkBtn" class="primary-btn">Copy Link</button>
         </div>
     </div>
 
-    <script type="module" src="script.js"></script>
+    <!-- Confirmation Modal -->
+    <div class="modal" id="confirmModal">
+        <div class="modal-content glass-panel small">
+            <div class="modal-header">
+                <h2 id="confirmTitle">Confirm Action</h2>
+            </div>
+            <div class="modal-body">
+                <p id="confirmMessage">Are you sure?</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn secondary" id="confirmCancel">Cancel</button>
+                <button class="btn danger" id="confirmAction">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- Scripts -->
+    <script type="module" src="js/script.js"></script>
 </body>
 
 </html>
-
-
