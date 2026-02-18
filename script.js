@@ -1,1551 +1,1798 @@
-// ==========================================
-// TASKWEB - FIXED SINGLE FILE VERSION
-// Debug mode enabled for troubleshooting
-// ==========================================
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-app.js";
+import {
+  getAuth,
+  signInAnonymously,
+  signInWithCustomToken,
+  onAuthStateChanged,
+} from "https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js";
+import {
+  getFirestore,
+  collection,
+  doc,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  getDoc,
+  onSnapshot,
+  serverTimestamp,
+  deleteField,
+  query,
+  where,
+  getDocs,
+  setDoc,
+  orderBy, // Added orderBy for sorting by createdAt
+  limit, // Added limit for finding the oldest
+} from "https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js";
 
-// ==========================================
-// DEBUG CONFIGURATION
-// ==========================================
-const DEBUG = true;
-function log(...args) {
-    if (DEBUG) console.log('[TaskWeb]', ...args);
-}
-function error(...args) {
-    console.error('[TaskWeb ERROR]', ...args);
-}
+document.addEventListener("DOMContentLoaded", () => {
+  console.log("DOM content loaded. Initializing app...");
 
-// ==========================================
-// FIREBASE CONFIGURATION
-// ==========================================
-// Your existing Firebase config
-const firebaseConfig = {
-    apiKey: "AIzaSyDNY51Jui8EOiCGQMdpLsn2kW4yTPYkk2w",
-    authDomain: "taskflow-841c1.firebaseapp.com",
-    projectId: "taskflow-841c1",
-    storageBucket: "taskflow-841c1.firebasestorage.app",
-    messagingSenderId: "109204779254",
-    appId: "1:109204779254:web:ed340a07677a37fa8277cd7"
-};
-
-// ==========================================
-// GLOBAL STATE
-// ==========================================
-const AppState = {
-    user: null,
-    board: null,
-    columns: [],
-    tasks: [],
-    activeUsers: [],
-    currentView: 'dashboard',
-    editingTask: null,
-    isInitialized: false,
-    listeners: [],
-    
-    setUser(user) {
-        this.user = user;
-        log('User set:', user?.uid);
-        this.notify('user');
-    },
-    
-    setBoard(board) {
-        this.board = board;
-        log('Board set:', board?.id);
-        this.notify('board');
-    },
-    
-    setColumns(columns) {
-        this.columns = columns.sort((a, b) => (a.order || 0) - (b.order || 0));
-        log('Columns updated:', columns.length);
-        this.notify('columns');
-    },
-    
-    setTasks(tasks) {
-        this.tasks = tasks;
-        log('Tasks updated:', tasks.length);
-        this.notify('tasks');
-    },
-    
-    setActiveUsers(users) {
-        this.activeUsers = users;
-        this.notify('activeUsers');
-    },
-    
-    setView(view) {
-        this.currentView = view;
-        this.notify('view');
-    },
-    
-    subscribe(callback) {
-        this.listeners.push(callback);
-        return () => {
-            this.listeners = this.listeners.filter(l => l !== callback);
-        };
-    },
-    
-    notify(change) {
-        this.listeners.forEach(l => l(change, this));
-    }
-};
-
-// ==========================================
-// FIREBASE INITIALIZATION - FIXED
-// ==========================================
-let app = null;
-let db = null;
-let auth = null;
-
-// Store unsubscribe functions
-let unsubscribers = {
-    board: null,
-    columns: null,
-    tasks: null,
-    presence: null
-};
-
-let presenceInterval = null;
-let columnSortable = null;
-let taskSortables = [];
-
-// ==========================================
-// INITIALIZATION WITH RETRY LOGIC
-// ==========================================
-async function initializeFirebase() {
-    log('Initializing Firebase...');
-    
+  // --- Firebase Configuration ---
+  let firebaseConfig = {};
+  if (typeof __firebase_config !== "undefined" && __firebase_config) {
+    // Use environment variable for Firebase config if available (for Canvas)
     try {
-        // Dynamic import of Firebase modules
-        const { initializeApp } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js');
-        const { getFirestore } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
-        const { getAuth } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js');
-        
-        // Check if already initialized (hot reload protection)
-        if (app) {
-            log('Firebase already initialized');
-            return { app, db, auth };
-        }
-        
-        // Use environment config if available
-        let config = firebaseConfig;
-        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-            try {
-                config = JSON.parse(__firebase_config);
-                log('Using environment config');
-            } catch (e) {
-                log('Failed to parse env config, using fallback');
-            }
-        }
-        
-        // Initialize Firebase
-        app = initializeApp(config);
-        db = getFirestore(app);
-        auth = getAuth(app);
-        
-        log('Firebase initialized successfully');
-        AppState.isInitialized = true;
-        
-        return { app, db, auth };
-    } catch (err) {
-        error('Firebase initialization failed:', err);
-        showToast('Failed to connect to Firebase. Check console.', 'error');
-        throw err;
+      firebaseConfig = JSON.parse(__firebase_config);
+      console.log("Using Firebase config from environment variables.");
+    } catch (e) {
+      console.error("Error parsing __firebase_config:", e);
+      // Fallback to default if parsing fails
+      firebaseConfig = {
+        apiKey: "AIzaSyDNY51Jui8EOiCGQMdpLsn2kW4yTPYkk2w",
+        authDomain: "taskflow-841c1.firebaseapp.com",
+        projectId: "taskflow-841c1",
+        storageBucket: "taskflow-841c1.firebasestorage.app",
+        messagingSenderId: "109204779254",
+        appId: "1:109204779254:web:ed340a07677a37fa8277cd7",
+      };
+      showCustomModal(
+        "Failed to load Firebase configuration. Please check the environment setup.",
+        "Configuration Error",
+        "alert",
+      );
     }
-}
-
-// ==========================================
-// AUTHENTICATION - WITH BETTER ERROR HANDLING
-// ==========================================
-async function initializeAuth() {
-    log('Initializing auth...');
-    
-    const { onAuthStateChanged, signInAnonymously, signInWithCustomToken } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js');
-    
-    return new Promise((resolve, reject) => {
-        // Set timeout for auth initialization
-        const timeout = setTimeout(() => {
-            reject(new Error('Auth initialization timeout'));
-        }, 10000);
-        
-        onAuthStateChanged(auth, async (user) => {
-            clearTimeout(timeout);
-            
-            if (user) {
-                log('User already signed in:', user.uid);
-                AppState.setUser({
-                    uid: user.uid,
-                    isAnonymous: user.isAnonymous,
-                    email: user.email
-                });
-                resolve(user);
-            } else {
-                log('No user, attempting sign in...');
-                try {
-                    let userCredential;
-                    
-                    // Try custom token first (for Canvas environment)
-                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                        log('Using custom token');
-                        userCredential = await signInWithCustomToken(auth, __initial_auth_token);
-                    } else {
-                        log('Using anonymous auth');
-                        userCredential = await signInAnonymously(auth);
-                    }
-                    
-                    log('Signed in successfully:', userCredential.user.uid);
-                    AppState.setUser({
-                        uid: userCredential.user.uid,
-                        isAnonymous: userCredential.user.isAnonymous,
-                        email: userCredential.user.email
-                    });
-                    resolve(userCredential.user);
-                } catch (signInError) {
-                    error('Sign in failed:', signInError);
-                    showToast('Authentication failed: ' + signInError.message, 'error');
-                    reject(signInError);
-                }
-            }
-        }, (err) => {
-            clearTimeout(timeout);
-            error('Auth state error:', err);
-            reject(err);
-        });
-    });
-}
-
-// ==========================================
-// PRESENCE TRACKING
-// ==========================================
-async function setupPresence(boardId) {
-    if (!auth?.currentUser || !boardId) return;
-    
-    log('Setting up presence for board:', boardId);
-    
-    const { doc, setDoc, deleteDoc, onSnapshot, collection, serverTimestamp } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
-    
-    // Cleanup existing
-    if (unsubscribers.presence) {
-        unsubscribers.presence();
-        unsubscribers.presence = null;
-    }
-    if (presenceInterval) {
-        clearInterval(presenceInterval);
-    }
-    
-    const userId = auth.currentUser.uid;
-    const presenceRef = doc(db, 'boardPresence', boardId, 'users', userId);
-    
-    const updatePresence = async () => {
-        try {
-            await setDoc(presenceRef, {
-                userId,
-                lastActive: serverTimestamp(),
-                joinedAt: serverTimestamp()
-            }, { merge: true });
-        } catch (e) {
-            // Don't spam errors for presence
-            if (e.code !== 'permission-denied') {
-                error('Presence update failed:', e);
-            }
-        }
+  } else {
+    // Fallback to default if environment variable is not defined (for local development)
+    firebaseConfig = {
+      apiKey: "AIzaSyDNY51Jui8EOiCGQMdpLsn2kW4yTPYkk2w",
+      authDomain: "taskflow-841c1.firebaseapp.com",
+      projectId: "taskflow-841c1",
+      storageBucket: "taskflow-841c1.firebasestorage.app",
+      messagingSenderId: "109204779254",
+      appId: "1:109204779254:web:ed340a07677a37fa827cd7",
     };
-    
-    await updatePresence();
-    presenceInterval = setInterval(updatePresence, 10000);
-    
-    // Listen to other users
-    const presenceCol = collection(db, 'boardPresence', boardId, 'users');
-    unsubscribers.presence = onSnapshot(presenceCol, (snapshot) => {
-        const now = Date.now();
-        const activeUsers = snapshot.docs
-            .map(d => d.data())
-            .filter(u => u.lastActive && (now - u.lastActive.toMillis()) < 15000)
-            .map(u => u.userId);
-        
-        AppState.setActiveUsers(activeUsers);
-    }, (err) => {
-        error('Presence listener error:', err);
-    });
-    
-    // Cleanup on page unload
-    window.addEventListener('beforeunload', async () => {
-        try {
-            await deleteDoc(presenceRef);
-        } catch (e) {
-            // Ignore cleanup errors
-        }
-    });
-}
+    console.warn(
+      "Firebase config not found in environment variables. Using default placeholders.",
+    );
+  }
 
-function cleanupPresence() {
-    if (unsubscribers.presence) {
-        unsubscribers.presence();
-        unsubscribers.presence = null;
-    }
-    if (presenceInterval) {
-        clearInterval(presenceInterval);
-        presenceInterval = null;
-    }
-}
+  // --- Initialize Firebase ---
+  console.log(
+    "Initializing Firebase app with projectId:",
+    firebaseConfig.projectId,
+  );
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const auth = getAuth(app);
+  console.log("Firebase initialized. DB and Auth instances created.");
 
-// ==========================================
-// BOARD OPERATIONS - WITH ERROR HANDLING
-// ==========================================
-async function loadBoard(boardId, isFromURL = false) {
-    log('Loading board:', boardId, 'fromURL:', isFromURL);
-    
-    const { doc, getDoc, onSnapshot, collection, query, where, getDocs } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
-    
-    try {
-        // Check auth first
-        if (!auth.currentUser) {
-            throw new Error('Not authenticated');
-        }
-        
-        const boardRef = doc(db, 'boards', boardId);
-        const boardSnap = await getDoc(boardRef);
-        
-        if (!boardSnap.exists()) {
-            throw new Error('Board not found');
-        }
-        
-        const boardData = boardSnap.data();
-        const userId = auth.currentUser.uid;
-        
-        log('Board data:', boardData);
-        
-        // Access control check
-        const isOwner = boardData.owner === userId;
-        const canAccess = isOwner || (boardData.isCollaborative && isFromURL);
-        
-        if (!canAccess) {
-            throw new Error('Access denied - You do not have permission to view this board');
-        }
-        
-        const board = {
-            id: boardId,
-            ...boardData,
-            isOwner
-        };
-        
-        AppState.setBoard(board);
-        
-        // Cleanup previous listeners
-        if (unsubscribers.board) unsubscribers.board();
-        if (unsubscribers.columns) unsubscribers.columns();
-        
-        // Listen to board changes
-        unsubscribers.board = onSnapshot(boardRef, (snap) => {
-            if (snap.exists()) {
-                AppState.setBoard({
-                    id: boardId,
-                    ...snap.data(),
-                    isOwner: snap.data().owner === userId
-                });
-            }
-        }, (err) => {
-            error('Board listener error:', err);
-            if (err.code === 'permission-denied') {
-                showToast('Permission denied for this board', 'error');
-            }
-        });
-        
-        // Listen to columns
-        const columnsQuery = query(collection(db, 'boards', boardId, 'columns'));
-        unsubscribers.columns = onSnapshot(columnsQuery, (snap) => {
-            const columns = snap.docs.map(d => ({
-                id: d.id,
-                ...d.data()
-            }));
-            AppState.setColumns(columns);
-        }, (err) => {
-            error('Columns listener error:', err);
-        });
-        
-        // Setup presence for collaborative boards
-        if (boardData.isCollaborative) {
-            await setupPresence(boardId);
+  // --- DOM Elements ---
+  const body = document.body;
+  const dashboardViewBtn = document.getElementById("dashboardViewBtn");
+  const kanbanViewBtn = document.getElementById("kanbanViewBtn");
+  const pageTitle = document.getElementById("pageTitle");
+  const menuToggleBtn = document.getElementById("menuToggleBtn");
+  const sidebar = document.querySelector(".sidebar");
+  const overlay = document.querySelector(".overlay");
+
+  // Modals
+  const openModalBtn = document.getElementById("openModalBtn");
+  openModalBtn.disabled = true; // Button initially disabled
+  const taskModal = document.getElementById("taskModal");
+  const boardModal = document.getElementById("boardModal"); // Initial board creation/join modal
+  const shareModal = document.getElementById("shareModal");
+  const modalTitle = document.getElementById("modalTitle");
+  const saveTaskBtn = document.getElementById("saveTaskBtn");
+  const taskLockedMessage = document.getElementById("taskLockedMessage"); // New element for locked message
+
+  // Task Form Inputs
+  const taskNameInput = document.getElementById("taskName");
+  const taskDescriptionInput = document.getElementById("taskDescription");
+  const priorityDropdownContainer = document.querySelector(
+    ".priority-dropdown-container",
+  );
+  const taskPriorityDisplay = document.getElementById(
+    "priorityDropdownDisplay",
+  );
+  const taskPriorityMenu = document.getElementById("priorityDropdownMenu");
+  const selectedPriorityText = document.getElementById("selectedPriorityText");
+  const taskDueDateInput = document.getElementById("taskDueDate");
+  let taskPriorityValue = "low";
+
+  // Dashboard Elements
+  const totalCountElement = document.getElementById("totalCount");
+  const todoCountElement = document.getElementById("todoCount");
+  const inProgressCountElement = document.getElementById("inProgressCount");
+  const doneCountElement = document.getElementById("doneCount");
+  const highPriorityCountElement = document.getElementById("highPriorityCount");
+  const overdueCountElement = document.getElementById("overdueCount");
+  const completionBar = document.getElementById("completionBar");
+  const completionText = document.getElementById("completionText");
+  const highPriorityBar = document.getElementById("highPriorityBar");
+  const mediumPriorityBar = document.getElementById("mediumPriorityBar");
+  const lowPriorityBar = document.getElementById("lowPriorityBar");
+
+  // Kanban Columns
+  const kanbanColumns = {
+    todo: document
+      .getElementById("column-todo")
+      .querySelector(".task-list-kanban"),
+    inprogress: document
+      .getElementById("column-inprogress")
+      .querySelector(".task-list-kanban"),
+    done: document
+      .getElementById("column-done")
+      .querySelector(".task-list-kanban"),
+  };
+
+  // Board Management Elements (from initial boardModal)
+  const createSoloBoardBtn = document.getElementById("createSoloBoardBtn");
+  const createCollaborativeBoardBtn = document.getElementById(
+    "createCollaborativeBoardBtn",
+  );
+  const joinBoardBtn = document.getElementById("joinBoardBtn");
+  const joinBoardIdInput = document.getElementById("joinBoardId");
+  const shareBoardBtn = document.getElementById("shareBoardBtn");
+  const closeShareModalBtn = document.getElementById("closeShareModal");
+  const copyLinkBtn = document.getElementById("copyLinkBtn");
+  const shareableLinkInput = document.getElementById("shareableLink");
+  const shareableBoardIdInput = document.getElementById("shareableBoardId");
+  const openBoardSelectionBtn = document.getElementById(
+    "openBoardSelectionBtn",
+  ); // Button to open board selection
+
+  // New: Shortcut button for joining collaborative boards
+  const joinCollaborativeBoardShortcutBtn = document.getElementById(
+    "joinCollaborativeBoardShortcutBtn",
+  );
+
+  // NEW: Elements for the new Join Collaborative Board Modal
+  const joinCollaborativeBoardModal = document.getElementById(
+    "joinCollaborativeBoardModal",
+  );
+  const closeJoinCollaborativeBoardModalBtn = document.getElementById(
+    "closeJoinCollaborativeBoardModal",
+  );
+  const joinCollaborativeBoardIdInput = document.getElementById(
+    "joinCollaborativeBoardIdInput",
+  );
+  const joinCollaborativeBoardConfirmBtn = document.getElementById(
+    "joinCollaborativeBoardConfirmBtn",
+  );
+
+  // User Info Display
+  const userIdText = document.getElementById("userIdText");
+  const boardIdText = document.getElementById("boardIdText");
+  const activeUsersLabel = document.getElementById("activeUsersLabel"); // New
+  const activeUsersCountElement = document.getElementById("activeUsersCount"); // New
+
+  // --- App State ---
+  let tasks = [];
+  let currentTaskToEditId = null;
+  let userId = null;
+  let boardId = null; // Currently active board ID
+  let unsubscribeTasks = null; // For Firestore tasks listener
+  let unsubscribePresence = null; // For Firestore presence listener
+  let isOwnerBoard = false;
+  let currentBoardCollaborative = false; // New flag: is the current board collaborative?
+  let activeUsers = []; // Array of active user IDs
+  let heartbeatInterval = null; // Interval for presence updates
+
+  // Store user's solo board ID in localStorage (it's unique per user)
+  let mySoloBoardId = localStorage.getItem("mySoloBoardId");
+  // Store user's owned collaborative board IDs (fetched dynamically from Firestore)
+  let myCollaborativeBoards = []; // Array of { id, name } for collaborative boards
+
+  // --- Custom Modal for Notifications and Confirmations ---
+  const customModalHtml = `
+        <div id="customAlertConfirmModal" class="modal">
+            <div class="modal-content">
+                <span class="close-btn" id="customModalCloseBtn">&times;</span>
+                <h2 id="customModalTitle"></h2>
+                <p id="customModalMessage"></p>
+                <div class="modal-actions" id="customModalActions">
+                    <button id="customModalConfirmBtn" class="primary-btn" style="display:none;">Confirm</button>
+                    <button id="customModalCancelBtn" class="secondary-btn" style="display:none;">Cancel</button>
+                </div>
+            </div>
+        </div>
+    `;
+  document.body.insertAdjacentHTML("beforeend", customModalHtml);
+
+  const customModal = document.getElementById("customAlertConfirmModal");
+  const customModalTitle = document.getElementById("customModalTitle");
+  const customModalMessage = document.getElementById("customModalMessage");
+  const customModalActions = document.getElementById("customModalActions");
+  const customModalConfirmBtn = document.getElementById(
+    "customModalConfirmBtn",
+  );
+  const customModalCancelBtn = document.getElementById("customModalCancelBtn");
+  const customModalCloseBtn = document.getElementById("customModalCloseBtn");
+
+  function showCustomModal(
+    message,
+    title = "Note",
+    type = "alert",
+    onConfirm = null,
+  ) {
+    customModalTitle.textContent = title;
+    customModalMessage.textContent = message;
+    customModal.style.display = "flex";
+    body.classList.add("no-scroll");
+
+    customModalConfirmBtn.style.display = "none";
+    customModalCancelBtn.style.display = "none";
+
+    if (type === "confirm") {
+      customModalConfirmBtn.style.display = "inline-block";
+      customModalCancelBtn.style.display = "inline-block";
+      customModalConfirmBtn.textContent = "Confirm"; // Reset text for confirm
+
+      customModalConfirmBtn.onclick = () => {
+        customModal.style.display = "none";
+        body.classList.remove("no-scroll");
+        if (onConfirm) onConfirm(true);
+      };
+      customModalCancelBtn.onclick = () => {
+        customModal.style.display = "none";
+        body.classList.remove("no-scroll");
+        if (onConfirm) onConfirm(false);
+      };
+    } else {
+      // 'alert' type
+      customModalConfirmBtn.style.display = "inline-block"; // Show 'Ok' button
+      customModalConfirmBtn.textContent = "OK";
+      customModalConfirmBtn.onclick = () => {
+        customModal.style.display = "none";
+        body.classList.remove("no-scroll");
+      };
+    }
+    customModalCloseBtn.onclick = () => {
+      customModal.style.display = "none";
+      body.classList.remove("no-scroll");
+      if (type === "confirm" && onConfirm) onConfirm(false); // If closed without choice for confirm
+    };
+  }
+
+  // --- New Modal for Managing Boards (Solo & Collaborative) ---
+  const manageBoardsModalHtml = `
+        <div id="manageBoardsModal" class="modal">
+            <div class="modal-content bg-white p-6 rounded-xl shadow-lg w-full max-w-lg mx-auto transform transition-all duration-300 ease-in-out scale-95 opacity-0" style="opacity:1; scale:1;">
+                <span class="close-btn text-gray-500 hover:text-gray-800 text-3xl font-bold absolute top-3 right-5 cursor-pointer" id="closeManageBoardsModal">&times;</span>
+                <h2 class="text-2xl font-semibold text-gray-800 mb-6 text-center">Manage Your Boards</h2>
+
+                <div class="mb-6 p-4 border border-blue-200 bg-blue-50 rounded-lg">
+                    <h3 class="text-xl font-medium text-blue-700 mb-3 flex items-center">
+                        Solo Board
+                    </h3>
+                    <div id="soloBoardSection" class="text-center">
+                        <!-- Solo board info or create button will go here -->
+                    </div>
+                </div>
+
+                <div class="mb-6 p-4 border border-green-200 bg-green-50 rounded-lg">
+                    <h3 class="text-xl font-medium text-green-700 mb-3 flex items-center">
+                        Collaborative Boards
+                    </h3>
+                    <div id="collaborativeBoardList" class="board-list-container space-y-2 mb-3">
+                        <!-- Collaborative boards will be listed here -->
+                    </div>
+                    <button style="margin-top: 30px;" id="createNewCollaborativeBoardBtn" class="primary-btn w-full py-2 px-4 rounded-md shadow-sm transition duration-150 ease-in-out hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-50">Create New Collaborative Board</button>
+                </div>
+            </div>
+        </div>
+    `;
+  document.body.insertAdjacentHTML("beforeend", manageBoardsModalHtml);
+
+  const manageBoardsModal = document.getElementById("manageBoardsModal");
+  const closeManageBoardsModalBtn = document.getElementById(
+    "closeManageBoardsModal",
+  );
+  const soloBoardSection = document.getElementById("soloBoardSection");
+  const collaborativeBoardList = document.getElementById(
+    "collaborativeBoardList",
+  );
+  const createNewCollaborativeBoardBtn = document.getElementById(
+    "createNewCollaborativeBoardBtn",
+  );
+
+  // Function to update UI based on board activity and type
+  function updateUIForBoardState(isBoardActive, isBoardCollaborative = false) {
+    console.log(
+      "Updating UI for board state. Is active:",
+      isBoardActive,
+      "Is collaborative:",
+      isBoardCollaborative,
+    );
+    if (isBoardActive) {
+      openModalBtn.disabled = false;
+      boardModal.style.display = "none";
+      manageBoardsModal.style.display = "none"; // Ensure this is hidden
+      joinCollaborativeBoardModal.style.display = "none"; // Ensure new join modal is hidden
+      // Show/hide share button based on board type
+      shareBoardBtn.style.display = isBoardCollaborative
+        ? "inline-block"
+        : "none";
+      activeUsersLabel.style.display = isBoardCollaborative ? "block" : "none";
+      activeUsersCountElement.style.display = isBoardCollaborative
+        ? "block"
+        : "none";
+
+      // Show/hide the "Join Collaborative Board" shortcut button ONLY if it's a solo board
+      joinCollaborativeBoardShortcutBtn.style.display = isBoardCollaborative
+        ? "none"
+        : "inline-block";
+    } else {
+      openModalBtn.disabled = true;
+      boardModal.style.display = "flex"; // This ensures the modal is shown when no board is active
+      shareBoardBtn.style.display = "none";
+      activeUsersLabel.style.display = "none";
+      activeUsersCountElement.style.display = "none";
+      manageBoardsModal.style.display = "none"; // Ensure this is hidden
+      joinCollaborativeBoardModal.style.display = "none"; // Ensure new join modal is hidden
+      joinCollaborativeBoardShortcutBtn.style.display = "none"; // Always hide if no board is active
+    }
+  }
+
+  // --- Authentication ---
+  console.log("Setting up onAuthStateChanged listener.");
+  onAuthStateChanged(auth, async (user) => {
+    console.log("onAuthStateChanged triggered. User object:", user);
+    if (user) {
+      userId = user.uid;
+      userIdText.textContent = userId;
+      console.log("User ID set:", userId);
+      initApp();
+    } else {
+      console.log(
+        "No user signed in. Attempting custom token sign-in or anonymous.",
+      );
+      try {
+        // Use __initial_auth_token if available (Canvas environment)
+        if (
+          typeof __initial_auth_token !== "undefined" &&
+          __initial_auth_token
+        ) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+          console.log("Signed in with custom token.");
         } else {
-            cleanupPresence();
+          // Fallback to anonymous sign-in if no custom token (local development)
+          await signInAnonymously(auth);
+          console.log("Signed in anonymously.");
         }
-        
-        // Update URL without reload
-        if (!isFromURL) {
-            window.history.pushState({ boardId }, '', `?board=${boardId}`);
-        }
-        
-        return board;
-        
-    } catch (err) {
-        error('Error loading board:', err);
-        throw err;
-    }
-}
-
-async function createBoard(isCollaborative, name = null) {
-    const { collection, doc, setDoc, serverTimestamp, query, where, getDocs } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
-    
-    const userId = auth.currentUser.uid;
-    
-    // Check for existing solo board
-    if (!isCollaborative) {
-        const existingQuery = query(
-            collection(db, 'boards'),
-            where('owner', '==', userId),
-            where('isCollaborative', '==', false)
+      } catch (error) {
+        console.error("Error during authentication:", error);
+        showCustomModal(
+          "There was an error during login. Please try again later.",
+          "Login Error",
+          "alert",
         );
-        const existing = await getDocs(existingQuery);
-        
-        if (!existing.empty) {
-            throw new Error('You already have a solo board');
-        }
+      }
     }
-    
-    const boardRef = doc(collection(db, 'boards'));
-    const boardId = boardRef.id;
-    const boardName = name || (isCollaborative ? 
-        `Collaborative Board ${new Date().toLocaleDateString()}` : 
-        'My Solo Board');
-    
-    await setDoc(boardRef, {
-        name: boardName,
-        owner: userId,
-        isCollaborative,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-    });
-    
-    // Create default columns
-    const columnsCol = collection(db, 'boards', boardId, 'columns');
-    const defaultColumns = [
-        { title: 'To Do', order: 0, createdAt: serverTimestamp() },
-        { title: 'In Progress', order: 1, createdAt: serverTimestamp() },
-        { title: 'Done', order: 2, createdAt: serverTimestamp() }
-    ];
-    
-    for (const col of defaultColumns) {
-        const colRef = doc(columnsCol);
-        await setDoc(colRef, col);
+  });
+
+  // --- App Initialization ---
+  async function initApp() {
+    console.log("initApp called. User ID:", userId);
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlBoardId = urlParams.get("board");
+
+    let targetBoardId = null;
+    let isFromURL = false;
+
+    if (urlBoardId) {
+      targetBoardId = urlBoardId;
+      isFromURL = true;
+      console.log("Board ID from URL:", targetBoardId);
     }
-    
-    log('Created board:', boardId);
-    return boardId;
-}
 
-async function updateBoard(boardId, updates) {
-    const { updateDoc, doc, serverTimestamp } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
-    await updateDoc(doc(db, 'boards', boardId), {
-        ...updates,
-        updatedAt: serverTimestamp()
-    });
-}
+    // Fetch user's solo board and collaborative boards
+    await fetchUserBoards();
 
-async function deleteBoard(boardId) {
-    const { deleteDoc, doc, collection, getDocs, writeBatch } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
-    
-    // Delete all tasks and columns first
-    const batch = writeBatch(db);
-    
-    const tasksSnap = await getDocs(collection(db, 'boards', boardId, 'tasks'));
-    tasksSnap.forEach(d => batch.delete(d.ref));
-    
-    const colsSnap = await getDocs(collection(db, 'boards', boardId, 'columns'));
-    colsSnap.forEach(d => batch.delete(d.ref));
-    
-    await batch.commit();
-    await deleteDoc(doc(db, 'boards', boardId));
-}
-
-async function createColumn(boardId, title) {
-    const { collection, doc, setDoc, serverTimestamp, getDocs } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
-    
-    const columnsCol = collection(db, 'boards', boardId, 'columns');
-    const snapshot = await getDocs(columnsCol);
-    const maxOrder = snapshot.docs.reduce((max, d) => Math.max(max, d.data().order || 0), -1);
-    
-    const colRef = doc(columnsCol);
-    await setDoc(colRef, {
-        title,
-        order: maxOrder + 1,
-        createdAt: serverTimestamp()
-    });
-    
-    return colRef.id;
-}
-
-async function updateColumn(boardId, columnId, updates) {
-    const { updateDoc, doc, serverTimestamp } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
-    await updateDoc(doc(db, 'boards', boardId, 'columns', columnId), {
-        ...updates,
-        updatedAt: serverTimestamp()
-    });
-}
-
-async function deleteColumn(boardId, columnId) {
-    const { deleteDoc, doc, collection, getDocs, query, where } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
-    
-    // Check for tasks in column
-    const tasksQuery = query(
-        collection(db, 'boards', boardId, 'tasks'),
-        where('columnId', '==', columnId)
-    );
-    const tasksSnap = await getDocs(tasksQuery);
-    
-    if (!tasksSnap.empty) {
-        throw new Error('Column contains tasks. Move or delete them first.');
+    if (targetBoardId) {
+      // Attempt to load the board specified in the URL
+      await loadBoard(targetBoardId, isFromURL);
+    } else if (mySoloBoardId) {
+      // If no URL board, try to load the user's solo board if it exists
+      await loadBoard(mySoloBoardId);
+    } else if (myCollaborativeBoards.length > 0) {
+      // If no solo board, check for collaborative boards
+      if (myCollaborativeBoards.length === 1) {
+        // Automatically load if only one collaborative board
+        await loadBoard(myCollaborativeBoards[0].id);
+      } else {
+        // If multiple collaborative boards, open the selection modal
+        openManageBoardsModal();
+      }
+    } else {
+      // No boards found, show the initial board creation/join modal
+      console.log(
+        "No Board ID in URL or LocalStorage, and no owned boards found. Showing board creation modal.",
+      );
+      updateUIForBoardState(false);
     }
-    
-    await deleteDoc(doc(db, 'boards', boardId, 'columns', columnId));
-}
+  }
 
-async function reorderColumns(boardId, columnIds) {
-    const { writeBatch, doc, serverTimestamp } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
-    
-    const batch = writeBatch(db);
-    columnIds.forEach((id, index) => {
-        const ref = doc(db, 'boards', boardId, 'columns', id);
-        batch.update(ref, { order: index, updatedAt: serverTimestamp() });
-    });
-    
-    await batch.commit();
-}
-
-async function fetchUserBoards() {
-    const { collection, query, where, getDocs, orderBy } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
-    
-    const userId = auth.currentUser.uid;
-    const q = query(
-        collection(db, 'boards'),
-        where('owner', '==', userId),
-        orderBy('createdAt', 'desc')
-    );
-    
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map(d => ({
-        id: d.id,
-        ...d.data()
-    }));
-}
-
-// ==========================================
-// TASK OPERATIONS
-// ==========================================
-async function listenToTasks(boardId) {
-    const { collection, query, onSnapshot, orderBy } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
-    
-    if (unsubscribers.tasks) {
-        unsubscribers.tasks();
-        unsubscribers.tasks = null;
+  // New function to fetch user's solo and collaborative boards
+  async function fetchUserBoards() {
+    if (!userId) {
+      console.warn("fetchUserBoards called without userId.");
+      return;
     }
-    
-    const tasksQuery = query(
-        collection(db, 'boards', boardId, 'tasks'),
-        orderBy('createdAt', 'desc')
-    );
-    
-    unsubscribers.tasks = onSnapshot(tasksQuery, (snapshot) => {
-        const tasks = snapshot.docs.map(d => ({
-            id: d.id,
-            ...d.data()
-        }));
-        AppState.setTasks(tasks);
-    }, (err) => {
-        error('Tasks listener error:', err);
-    });
-}
-
-async function createTask(boardId, taskData) {
-    const { collection, addDoc, serverTimestamp } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
-    
-    const tasksCol = collection(db, 'boards', boardId, 'tasks');
-    const docRef = await addDoc(tasksCol, {
-        ...taskData,
-        createdBy: auth.currentUser.uid,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        lockedBy: null
-    });
-    
-    return docRef.id;
-}
-
-async function updateTask(boardId, taskId, updates, skipLockCheck = false) {
-    const { updateDoc, doc, getDoc, serverTimestamp } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
-    
-    const taskRef = doc(db, 'boards', boardId, 'tasks', taskId);
-    
-    if (!skipLockCheck) {
-        const snap = await getDoc(taskRef);
-        if (!snap.exists()) throw new Error('Task not found');
-        
-        const data = snap.data();
-        if (data.lockedBy && data.lockedBy !== auth.currentUser.uid) {
-            throw new Error('Task is being edited by another user');
-        }
-    }
-    
-    await updateDoc(taskRef, {
-        ...updates,
-        updatedAt: serverTimestamp()
-    });
-}
-
-async function deleteTask(boardId, taskId) {
-    const { deleteDoc, doc } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
-    await deleteDoc(doc(db, 'boards', boardId, 'tasks', taskId));
-}
-
-async function lockTask(boardId, taskId) {
-    const { updateDoc, doc, serverTimestamp } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
-    await updateDoc(doc(db, 'boards', boardId, 'tasks', taskId), {
-        lockedBy: auth.currentUser.uid,
-        updatedAt: serverTimestamp()
-    });
-}
-
-async function unlockTask(boardId, taskId) {
-    const { updateDoc, doc, serverTimestamp, deleteField } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
-    await updateDoc(doc(db, 'boards', boardId, 'tasks', taskId), {
-        lockedBy: deleteField(),
-        updatedAt: serverTimestamp()
-    });
-}
-
-async function moveTask(boardId, taskId, newColumnId, newOrder) {
-    const { updateDoc, doc, serverTimestamp } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
-    await updateDoc(doc(db, 'boards', boardId, 'tasks', taskId), {
-        columnId: newColumnId,
-        order: newOrder,
-        updatedAt: serverTimestamp()
-    });
-}
-
-// ==========================================
-// DRAG AND DROP
-// ==========================================
-async function initializeDragAndDrop(boardId) {
-    cleanupDrag();
-    
-    const boardContainer = document.getElementById('boardContainer');
-    if (!boardContainer) return;
-    
     try {
-        const { default: Sortable } = await import('https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/modular/sortable.complete.esm.js');
-        
-        // Column sorting
-        columnSortable = new Sortable(boardContainer, {
-            animation: 200,
-            handle: '.column-header',
-            draggable: '.kanban-column',
-            ghostClass: 'sortable-ghost',
-            dragClass: 'sortable-drag',
-            onEnd: async (evt) => {
-                const columns = Array.from(boardContainer.querySelectorAll('.kanban-column'));
-                const columnIds = columns.map(col => col.dataset.id);
-                
-                try {
-                    await reorderColumns(boardId, columnIds);
-                } catch (err) {
-                    error('Failed to reorder columns:', err);
-                    showToast('Failed to save column order', 'error');
-                }
-            }
-        });
-        
-        // Task sorting within columns
-        initializeTaskSortables(boardId, Sortable);
-        
-    } catch (err) {
-        error('SortableJS failed to load:', err);
-    }
-}
+      const ownedBoardsQuery = query(
+        collection(db, "boards"),
+        where("owner", "==", userId),
+      );
+      const querySnapshot = await getDocs(ownedBoardsQuery);
 
-async function initializeTaskSortables(boardId, Sortable) {
-    taskSortables.forEach(s => s?.destroy());
-    taskSortables = [];
-    
-    const taskLists = document.querySelectorAll('.task-list');
-    
-    taskLists.forEach(list => {
-        const sortable = new Sortable(list, {
-            group: 'tasks',
-            animation: 200,
-            delay: 0,
-            delayOnTouchOnly: true,
-            touchStartThreshold: 5,
-            ghostClass: 'sortable-ghost',
-            dragClass: 'sortable-drag',
-            forceFallback: true,
-            fallbackClass: 'dragging',
-            onStart: (evt) => {
-                evt.item.classList.add('dragging');
+      mySoloBoardId = null; // Reset solo board ID
+      myCollaborativeBoards = []; // Reset collaborative boards
+
+      querySnapshot.forEach((doc) => {
+        const boardData = doc.data();
+        if (boardData.isCollaborative) {
+          myCollaborativeBoards.push({
+            id: doc.id,
+            name: boardData.name || `Board ${doc.id.substring(0, 4)}`,
+            createdAt: boardData.createdAt,
+          });
+        } else {
+          // Assuming only one solo board is ever created per user
+          mySoloBoardId = doc.id;
+        }
+      });
+      // Sort collaborative boards by createdAt to easily find the oldest
+      myCollaborativeBoards.sort(
+        (a, b) => a.createdAt.toMillis() - b.createdAt.toMillis(),
+      );
+
+      localStorage.setItem("mySoloBoardId", mySoloBoardId || ""); // Update local storage for solo board
+      console.log(
+        "Fetched user boards. Solo:",
+        mySoloBoardId,
+        "Collaborative:",
+        myCollaborativeBoards.length,
+      );
+    } catch (error) {
+      console.error("Error fetching user boards:", error);
+      showCustomModal(
+        "Error fetching your boards. Please try again.",
+        "Error",
+        "alert",
+      );
+    }
+  }
+
+  // New function to load a board
+  async function loadBoard(idToLoad, isFromURL = false) {
+    if (!idToLoad) {
+      console.warn("loadBoard called with empty ID.");
+      updateUIForBoardState(false);
+      return false; // Indicate failure
+    }
+
+    try {
+      const boardDocRef = doc(db, "boards", idToLoad);
+      const boardDoc = await getDoc(boardDocRef);
+
+      if (boardDoc.exists()) {
+        const boardData = boardDoc.data();
+        if (
+          boardData.owner === userId ||
+          (isFromURL && boardData.isCollaborative)
+        ) {
+          boardId = idToLoad;
+          boardIdText.textContent = boardId;
+          isOwnerBoard = boardData.owner === userId;
+          currentBoardCollaborative = boardData.isCollaborative || false;
+
+          window.history.pushState({}, "", `?board=${boardId}`);
+          updateUIForBoardState(true, currentBoardCollaborative);
+          listenForTasks();
+          console.log(
+            "Successfully loaded board:",
+            boardId,
+            "Is owner:",
+            isOwnerBoard,
+            "Is collaborative:",
+            currentBoardCollaborative,
+          );
+
+          // Update localStorage for solo board if applicable
+          if (!currentBoardCollaborative) {
+            localStorage.setItem("mySoloBoardId", boardId);
+          } else {
+            // If switching from solo to collaborative, clear solo board from local storage
+            // (or if explicitly loading a collaborative board, don't set solo board)
+            // No action needed for collaborative boards here, as they are fetched dynamically.
+          }
+
+          // Start presence tracking if collaborative
+          if (currentBoardCollaborative) {
+            setupUserPresence();
+          } else {
+            removeUserPresence();
+            activeUsersCountElement.textContent = "0";
+          }
+
+          return true; // Board loaded successfully
+        } else if (
+          !boardData.isCollaborative &&
+          isFromURL &&
+          boardData.owner !== userId
+        ) {
+          // Trying to join a solo board via URL that isn't owned by current user
+          console.warn(
+            "Attempted to join a solo board not owned by user via URL. Access denied.",
+          );
+          showCustomModal(
+            "This is a solo board and cannot be shared. Please create your own or join a collaborative board.",
+            "Access Denied",
+            "alert",
+          );
+          window.history.pushState({}, "", window.location.pathname);
+          updateUIForBoardState(false);
+          return false;
+        } else if (
+          boardData.isCollaborative &&
+          !isFromURL &&
+          boardData.owner !== userId
+        ) {
+          // Trying to load a collaborative board not owned by user, not from URL (e.g., old localstorage reference)
+          console.warn(
+            "Attempted to load a collaborative board not owned by user without URL. Access denied.",
+          );
+          showCustomModal(
+            "You do not have access to this board.",
+            "Access Denied",
+            "alert",
+          );
+          window.history.pushState({}, "", window.location.pathname);
+          updateUIForBoardState(false);
+          return false;
+        }
+      } else {
+        // Board from URL/LocalStorage does not exist (e.g., deleted)
+        console.warn("Board from URL/LocalStorage does not exist:", idToLoad);
+        showCustomModal(
+          "Board not found or no longer exists. Please check the ID or create a new board.",
+          "Board Not Found",
+          "alert",
+        );
+        // Clear any invalid local storage reference for solo board
+        if (localStorage.getItem("mySoloBoardId") === idToLoad) {
+          localStorage.removeItem("mySoloBoardId");
+          mySoloBoardId = null; // Update in-memory state
+        }
+        window.history.pushState({}, "", window.location.pathname);
+        updateUIForBoardState(false);
+        return false;
+      }
+    } catch (error) {
+      console.error("Error loading board:", error);
+      showCustomModal(
+        "Error loading board. Please check your connection.",
+        "Error",
+        "alert",
+      );
+      // Clear any invalid local storage reference for solo board
+      if (localStorage.getItem("mySoloBoardId") === idToLoad) {
+        localStorage.removeItem("mySoloBoardId");
+        mySoloBoardId = null; // Update in-memory state
+      }
+      window.history.pushState({}, "", window.location.pathname);
+      updateUIForBoardState(false);
+      return false;
+    }
+  }
+
+  // --- Board Management ---
+  async function createNewBoard(isCollaborative) {
+    console.log(
+      `Create ${isCollaborative ? "Collaborative" : "Solo"} Board button clicked.`,
+    );
+    if (!userId) {
+      showCustomModal(
+        "User is not logged in. Please wait until the login process is complete.",
+        "Registration pending",
+        "alert",
+      );
+      console.warn("Attempted to create board before user was authenticated.");
+      return;
+    }
+
+    try {
+      if (!isCollaborative) {
+        // Creating a Solo Board
+        if (mySoloBoardId) {
+          showCustomModal(
+            `You already have a solo board (ID: ${mySoloBoardId}). Would you like to load it?`,
+            "Solo Board Exists",
+            "confirm",
+            async (confirmed) => {
+              if (confirmed) {
+                const loaded = await loadBoard(mySoloBoardId);
+                if (loaded) toggleSidebar(true);
+              } else {
+                console.log("User chose not to load existing solo board.");
+              }
             },
-            onEnd: async (evt) => {
-                evt.item.classList.remove('dragging');
-                
-                const taskId = evt.item.dataset.id;
-                const newColumnId = evt.to.closest('.kanban-column')?.dataset.id;
-                const newIndex = evt.newIndex;
-                
-                if (!newColumnId) return;
-                
-                try {
-                    await moveTask(boardId, taskId, newColumnId, newIndex);
-                } catch (err) {
-                    error('Failed to move task:', err);
-                    showToast('Failed to move task', 'error');
-                }
+          );
+          return; // Exit as user made a choice or cancelled
+        } else {
+          // Create a new solo board
+          const newBoardRef = doc(collection(db, "boards"));
+          const newBoardId = newBoardRef.id;
+          await setDoc(newBoardRef, {
+            createdAt: serverTimestamp(),
+            owner: userId,
+            isCollaborative: false,
+            name: "My Solo Board", // Default name for solo board
+          });
+          mySoloBoardId = newBoardId;
+          localStorage.setItem("mySoloBoardId", newBoardId); // Persist solo board ID
+          showCustomModal(
+            `New solo board created! ID: ${newBoardId}`,
+            "Board Created",
+            "alert",
+          );
+          const loaded = await loadBoard(newBoardId);
+          if (loaded) toggleSidebar(true);
+        }
+      } else {
+        // Creating a Collaborative Board
+        const newBoardName = prompt(
+          "Enter a name for your new collaborative board (optional):",
+        );
+        const boardName = newBoardName
+          ? newBoardName.trim()
+          : `Collaborative Board ${new Date().toLocaleDateString()}`;
+
+        const newBoardRef = doc(collection(db, "boards"));
+        const newBoardId = newBoardRef.id;
+        await setDoc(newBoardRef, {
+          createdAt: serverTimestamp(),
+          owner: userId,
+          isCollaborative: true,
+          name: boardName,
+        });
+        // After creation, re-fetch user boards to update the in-memory list
+        await fetchUserBoards();
+        showCustomModal(
+          `New collaborative board created! ID: ${newBoardId}`,
+          "Board Created",
+          "alert",
+        );
+        const loaded = await loadBoard(newBoardId);
+        if (loaded) toggleSidebar(true);
+      }
+    } catch (error) {
+      console.error("Error creating board:", error);
+      showCustomModal(
+        "Board could not be created. Please try again.",
+        "Error",
+        "alert",
+      );
+    }
+  }
+
+  createSoloBoardBtn.addEventListener("click", () => createNewBoard(false));
+  createCollaborativeBoardBtn.addEventListener("click", () =>
+    createNewBoard(true),
+  );
+
+  // This joinBoardBtn is for the original boardModal, which stays the same
+  joinBoardBtn.addEventListener("click", async () => {
+    console.log("Join Board button clicked (from original boardModal).");
+    if (!userId) {
+      showCustomModal(
+        "User is not logged in. Please wait until the login process is complete.",
+        "Registration pending",
+        "alert",
+      );
+      console.warn("Attempted to join board before user was authenticated.");
+      return;
+    }
+    const inputBoardId = joinBoardIdInput.value.trim();
+    if (!inputBoardId) {
+      showCustomModal("Please enter a board ID.", "Input required", "alert");
+      return;
+    }
+    const loaded = await loadBoard(inputBoardId, true); // Treat as if from URL for access check
+    if (loaded) {
+      joinBoardIdInput.value = ""; // Clear input after attempt
+      toggleSidebar(true);
+    }
+  });
+
+  // --- Open Manage Boards Modal ---
+  openBoardSelectionBtn.addEventListener("click", async () => {
+    console.log("Open Manage Boards button clicked.");
+    // Ensure initial boardModal and new join modal are hidden if open
+    boardModal.style.display = "none";
+    joinCollaborativeBoardModal.style.display = "none";
+
+    // Fetch latest board data before opening the modal
+    await fetchUserBoards();
+    openManageBoardsModal();
+  });
+
+  // New: Event listener for the "Join Collaborative Board" shortcut button
+  joinCollaborativeBoardShortcutBtn.addEventListener("click", () => {
+    console.log("Join Collaborative Board shortcut button clicked.");
+    openNewJoinCollaborativeBoardModal(); // Open the new specific join modal
+    toggleSidebar(true); // Close sidebar after opening the modal
+  });
+
+  // NEW: Functions for the dedicated Join Collaborative Board Modal
+  function openNewJoinCollaborativeBoardModal() {
+    joinCollaborativeBoardIdInput.value = ""; // Clear input field
+    joinCollaborativeBoardModal.style.display = "flex";
+    body.classList.add("no-scroll");
+    joinCollaborativeBoardIdInput.focus(); // Focus the input for convenience
+    console.log("New Join Collaborative Board modal opened.");
+  }
+
+  function closeNewJoinCollaborativeBoardModal() {
+    joinCollaborativeBoardModal.style.display = "none";
+    body.classList.remove("no-scroll");
+    console.log("New Join Collaborative Board modal closed.");
+  }
+
+  closeJoinCollaborativeBoardModalBtn.addEventListener(
+    "click",
+    closeNewJoinCollaborativeBoardModal,
+  );
+
+  joinCollaborativeBoardConfirmBtn.addEventListener("click", async () => {
+    console.log(
+      "Join Board button clicked (from new joinCollaborativeBoardModal).",
+    );
+    if (!userId) {
+      showCustomModal(
+        "User is not logged in. Please wait until the login process is complete.",
+        "Registration pending",
+        "alert",
+      );
+      console.warn("Attempted to join board before user was authenticated.");
+      return;
+    }
+    const inputBoardId = joinCollaborativeBoardIdInput.value.trim();
+    if (!inputBoardId) {
+      showCustomModal("Please enter a board ID.", "Input required", "alert");
+      return;
+    }
+    const loaded = await loadBoard(inputBoardId, true); // Treat as if from URL for access check
+    if (loaded) {
+      closeNewJoinCollaborativeBoardModal(); // Close the new modal on successful load
+    }
+  });
+
+  // Function to open and populate the Manage Boards Modal
+  function openManageBoardsModal() {
+    soloBoardSection.innerHTML = ""; // Clear existing content
+    collaborativeBoardList.innerHTML = ""; // Clear existing content
+
+    // Populate Solo Board Section
+    if (mySoloBoardId) {
+      soloBoardSection.innerHTML = `
+                <p style="text-align: left" class="mb-2 text-gray-700">Your current solo board: <span class="font-bold">${mySoloBoardId}</span></p>
+                <button style="margin-bottom: 20px;" id="loadSoloBoardBtn" class="primary-btn w-full py-2 px-4 rounded-md shadow-sm transition duration-150 ease-in-out hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50">Load My Solo Board</button>
+            `;
+      document
+        .getElementById("loadSoloBoardBtn")
+        .addEventListener("click", async () => {
+          const loaded = await loadBoard(mySoloBoardId);
+          if (loaded) {
+            manageBoardsModal.style.display = "none";
+            body.classList.remove("no-scroll");
+          }
+        });
+    } else {
+      soloBoardSection.innerHTML = `
+                <p class="mb-2 text-gray-700">You don't have a solo board yet.</p>
+                <button style="margin-bottom: 20px;" id="createSoloBoardFromManageBtn" class="primary-btn w-full py-2 px-4 rounded-md shadow-sm transition duration-150 ease-in-out hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50">Create New Solo Board</button>
+            `;
+      document
+        .getElementById("createSoloBoardFromManageBtn")
+        .addEventListener("click", async () => {
+          await createNewBoard(false); // Call the general create function for solo
+          manageBoardsModal.style.display = "none";
+          body.classList.remove("no-scroll");
+        });
+    }
+
+    // Populate Collaborative Boards List
+    if (myCollaborativeBoards.length === 0) {
+      collaborativeBoardList.innerHTML =
+        '<p class="text-gray-600">You don\'t have any collaborative boards yet.</p>';
+    } else {
+      myCollaborativeBoards.forEach((board) => {
+        const boardItem = document.createElement("div");
+        boardItem.className =
+          "flex justify-between items-center p-3 bg-white border border-gray-200 rounded-md shadow-sm transition duration-150 ease-in-out hover:bg-gray-50";
+        boardItem.innerHTML = `
+                    <span class="font-medium text-gray-800">${board.name} <span class="text-sm text-gray-500">(ID: ${board.id.substring(0, 4)}...)</span></span>
+                    <div class="flex space-x-2">
+                        <button style="margin-top: 20px;" class="select-collaborative-board-item-btn secondary-btn px-4 py-2 rounded-md transition duration-150 ease-in-out hover:bg-gray-200" data-id="${board.id}">Select</button>
+                        ${
+                          isOwnerBoard
+                            ? `
+                            <button style="margin-top: 10px;" class="edit-collaborative-board-btn secondary-btn px-4 py-2 rounded-md transition duration-150 ease-in-out hover:bg-yellow-200" data-id="${board.id}" data-name="${board.name}">Edit</button>
+                            <button style="margin-top: 10px; margin-bottom: 20px;" class="delete-collaborative-board-btn secondary-btn px-4 py-2 rounded-md transition duration-150 ease-in-out hover:bg-red-200" data-id="${board.id}">Delete</button>
+                        `
+                            : ""
+                        }
+                    </div>
+                `;
+        collaborativeBoardList.appendChild(boardItem);
+      });
+
+      document
+        .querySelectorAll(".select-collaborative-board-item-btn")
+        .forEach((button) => {
+          button.addEventListener("click", async (e) => {
+            const selectedBoardId = e.target.dataset.id;
+            const loaded = await loadBoard(selectedBoardId);
+            if (loaded) {
+              manageBoardsModal.style.display = "none";
+              body.classList.remove("no-scroll");
             }
+          });
         });
-        
-        taskSortables.push(sortable);
+
+      // Event listeners for editing and deleting collaborative boards
+      document
+        .querySelectorAll(".edit-collaborative-board-btn")
+        .forEach((button) => {
+          button.addEventListener("click", async (e) => {
+            const boardIdToEdit = e.target.dataset.id;
+            const currentName = e.target.dataset.name;
+            manageBoardsModal.style.display = "none";
+            body.classList.remove("no-scroll");
+            await editCollaborativeBoard(boardIdToEdit, currentName);
+          });
+        });
+
+      document
+        .querySelectorAll(".delete-collaborative-board-btn")
+        .forEach((button) => {
+          button.addEventListener("click", async (e) => {
+            const boardIdToDelete = e.target.dataset.id;
+            manageBoardsModal.style.display = "none";
+            body.classList.remove("no-scroll");
+            await deleteCollaborativeBoard(boardIdToDelete);
+          });
+        });
+    }
+
+    // Event listener for creating new collaborative board from this modal
+    createNewCollaborativeBoardBtn.onclick = async () => {
+      await createNewBoard(true);
+      manageBoardsModal.style.display = "none";
+      body.classList.remove("no-scroll");
+    };
+
+    manageBoardsModal.style.display = "flex";
+    manageBoardsModal
+      .querySelector(".modal-content")
+      .classList.remove("scale-95", "opacity-0"); // Reset animation
+    manageBoardsModal
+      .querySelector(".modal-content")
+      .classList.add("scale-100", "opacity-100");
+    body.classList.add("no-scroll");
+  }
+
+  closeManageBoardsModalBtn.addEventListener("click", () => {
+    manageBoardsModal.style.display = "none";
+    body.classList.remove("no-scroll");
+    // If no board is active after closing, show the initial board modal (for create/join)
+    if (!boardId) {
+      updateUIForBoardState(false);
+    }
+  });
+
+  // New: Edit Collaborative Board Function
+  async function editCollaborativeBoard(boardIdToEdit, currentName) {
+    showCustomModal(
+      `Enter new name for board ID: ${boardIdToEdit}`,
+      "Edit Board Name",
+      "confirm",
+      async (confirmed) => {
+        if (confirmed) {
+          const newName = prompt(
+            `Rename board "${currentName}" to:`,
+            currentName,
+          );
+          if (newName && newName.trim() !== "") {
+            try {
+              await updateDoc(doc(db, "boards", boardIdToEdit), {
+                name: newName.trim(),
+              });
+              showCustomModal(
+                "Board name updated successfully!",
+                "Success",
+                "alert",
+              );
+              await fetchUserBoards(); // Re-fetch to update the list in the modal
+              openManageBoardsModal(); // Re-open to display updated list
+            } catch (error) {
+              console.error("Error updating board name:", error);
+              showCustomModal("Failed to update board name.", "Error", "alert");
+            }
+          } else if (newName !== null) {
+            // User clicked OK but entered empty/whitespace
+            showCustomModal(
+              "Board name cannot be empty.",
+              "Invalid Input",
+              "alert",
+            );
+          }
+        }
+      },
+    );
+  }
+
+  // Helper function to find the oldest collaborative board
+  async function findOldestCollaborativeBoard() {
+    try {
+      const q = query(
+        collection(db, "boards"),
+        where("owner", "==", userId),
+        where("isCollaborative", "==", true),
+        orderBy("createdAt", "asc"), // Order by creation time ascending
+        limit(1), // Get only the first (oldest) one
+      );
+      const querySnapshot = await getDocs(q);
+      if (!querySnapshot.empty) {
+        const oldestBoard = querySnapshot.docs[0];
+        return { id: oldestBoard.id, ...oldestBoard.data() };
+      }
+      return null;
+    } catch (error) {
+      console.error("Error finding oldest collaborative board:", error);
+      return null;
+    }
+  }
+
+  // New: Delete Collaborative Board Function
+  async function deleteCollaborativeBoard(boardIdToDelete) {
+    showCustomModal(
+      `Are you sure you want to delete this collaborative board (ID: ${boardIdToDelete})? This action cannot be undone.`,
+      "Confirm Delete Board",
+      "confirm",
+      async (confirmed) => {
+        if (confirmed) {
+          try {
+            // Delete all tasks within the board's subcollection
+            const tasksQuery = query(
+              collection(db, "boards", boardIdToDelete, "tasks"),
+            );
+            const taskSnapshot = await getDocs(tasksQuery);
+            const deletePromises = [];
+            taskSnapshot.forEach((taskDoc) => {
+              deletePromises.push(
+                deleteDoc(
+                  doc(db, "boards", boardIdToDelete, "tasks", taskDoc.id),
+                ),
+              );
+            });
+            await Promise.all(deletePromises);
+
+            // Delete the board document itself
+            await deleteDoc(doc(db, "boards", boardIdToDelete));
+
+            // If the deleted board was the currently active one, clear current board state
+            if (boardId === boardIdToDelete) {
+              boardId = null;
+              boardIdText.textContent = "None";
+              currentBoardCollaborative = false;
+              removeUserPresence(); // Ensure presence is cleaned up
+              if (unsubscribeTasks) {
+                unsubscribeTasks();
+                unsubscribeTasks = null;
+              }
+              window.history.pushState({}, "", window.location.pathname); // Clear URL param
+
+              // After deletion, re-evaluate which board to load or show modal
+              await fetchUserBoards(); // Re-fetch all user boards
+              if (myCollaborativeBoards.length > 0) {
+                // If other collaborative boards exist, load the oldest one
+                const oldestBoard = await findOldestCollaborativeBoard();
+                if (oldestBoard) {
+                  await loadBoard(oldestBoard.id);
+                  showCustomModal(
+                    "Board deleted. You have been switched to your oldest collaborative board.",
+                    "Board Deleted",
+                    "alert",
+                  );
+                } else {
+                  // This case should theoretically not be reached if myCollaborativeBoards.length > 0
+                  // but as a fallback, show the board modal
+                  updateUIForBoardState(false);
+                  showCustomModal(
+                    "Board deleted. No other collaborative boards found. Please create or join a new board.",
+                    "Board Deleted",
+                    "alert",
+                  );
+                }
+              } else {
+                // If no other collaborative boards, open the board creation/join modal
+                updateUIForBoardState(false);
+                showCustomModal(
+                  "Board deleted. No other collaborative boards found. Please create or join a new board.",
+                  "Board Deleted",
+                  "alert",
+                );
+              }
+            } else {
+              // If a non-active collaborative board was deleted, just update the list
+              await fetchUserBoards();
+              showCustomModal(
+                "Board deleted successfully!",
+                "Success",
+                "alert",
+              );
+            }
+          } catch (error) {
+            console.error("Error deleting board:", error);
+            showCustomModal(
+              "Failed to delete board. Please try again.",
+              "Error",
+              "alert",
+            );
+          }
+        }
+      },
+    );
+  }
+
+  // --- Real-time Data Synchronization with Firestore ---
+  function listenForTasks() {
+    console.log("Setting up Firestore listener for board:", boardId);
+    if (unsubscribeTasks) {
+      console.log("Unsubscribing from previous tasks listener.");
+      unsubscribeTasks(); // Disconnect old listener if boards are switched
+    }
+    if (!boardId) {
+      console.warn(
+        "listenForTasks called without a boardId. Skipping listener setup.",
+      );
+      return;
+    }
+
+    const tasksCollectionRef = collection(db, "boards", boardId, "tasks");
+
+    unsubscribeTasks = onSnapshot(
+      tasksCollectionRef,
+      (snapshot) => {
+        console.log(
+          "Firestore task snapshot received. Number of tasks:",
+          snapshot.docs.length,
+        );
+        tasks = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+        renderTasks();
+      },
+      (error) => {
+        console.error("Error while listening to tasks:", error);
+        showCustomModal(
+          "Error loading tasks. Please try again.",
+          "Data Error",
+          "alert",
+        );
+      },
+    );
+  }
+
+  // --- User Presence Tracking (for Collaborative Boards) ---
+  async function setupUserPresence() {
+    console.log("Setting up user presence for board:", boardId);
+    if (unsubscribePresence) {
+      unsubscribePresence(); // Clean up previous listener
+    }
+    if (heartbeatInterval) {
+      clearInterval(heartbeatInterval); // Clear old heartbeat
+    }
+    if (!boardId || !userId) {
+      console.warn("Cannot set up user presence without boardId or userId.");
+      return;
+    }
+
+    const userPresenceDocRef = doc(
+      db,
+      "boardPresence",
+      boardId,
+      "users",
+      userId,
+    );
+
+    // Set initial presence and update periodically (heartbeat)
+    const updatePresence = async () => {
+      try {
+        await setDoc(
+          userPresenceDocRef,
+          {
+            userId: userId,
+            lastActive: serverTimestamp(),
+          },
+          { merge: true },
+        ); // Use merge to avoid overwriting existing fields
+      } catch (error) {
+        console.error("Error updating user presence:", error);
+      }
+    };
+
+    // Update presence immediately
+    updatePresence();
+
+    // Set up heartbeat interval
+    heartbeatInterval = setInterval(updatePresence, 10000); // Update every 10 seconds
+
+    // Listen for all users on this board
+    const presenceCollectionRef = collection(
+      db,
+      "boardPresence",
+      boardId,
+      "users",
+    );
+    unsubscribePresence = onSnapshot(
+      presenceCollectionRef,
+      (snapshot) => {
+        const now = Date.now();
+        // Filter out users who haven't updated their presence in the last 15 seconds
+        activeUsers = snapshot.docs
+          .filter((doc) => {
+            const data = doc.data();
+            if (data.lastActive && data.lastActive.toMillis) {
+              // Check if it's a Firestore Timestamp
+              return now - data.lastActive.toMillis() < 15000; // 15 seconds grace period
+            }
+            return false; // Invalid timestamp, filter out
+          })
+          .map((doc) => doc.data().userId);
+        activeUsersCountElement.textContent = activeUsers.length;
+        console.log("Active users:", activeUsers.length);
+        renderTasks(); // Re-render tasks to reflect any new locks
+      },
+      (error) => {
+        console.error("Error listening to user presence:", error);
+      },
+    );
+
+    // Remove user presence when they close the tab/browser
+    window.addEventListener("beforeunload", async () => {
+      if (userPresenceDocRef) {
+        try {
+          await deleteDoc(userPresenceDocRef);
+          console.log("User presence removed on unload.");
+        } catch (e) {
+          console.warn("Failed to remove user presence on unload:", e);
+        }
+      }
     });
-}
+  }
 
-function cleanupDrag() {
-    if (columnSortable) {
-        columnSortable.destroy();
-        columnSortable = null;
+  // Function to remove user presence (e.g., when switching to a solo board)
+  async function removeUserPresence() {
+    if (unsubscribePresence) {
+      console.log("Unsubscribing from presence listener.");
+      unsubscribePresence();
+      unsubscribePresence = null;
     }
-    taskSortables.forEach(s => s?.destroy());
-    taskSortables = [];
-}
+    if (heartbeatInterval) {
+      console.log("Clearing heartbeat interval.");
+      clearInterval(heartbeatInterval);
+      heartbeatInterval = null;
+    }
+    // Only attempt to delete if boardId and userId are set (i.e., we were actively tracking presence)
+    if (boardId && userId) {
+      try {
+        const userPresenceDocRef = doc(
+          db,
+          "boardPresence",
+          boardId,
+          "users",
+          userId,
+        );
+        await deleteDoc(userPresenceDocRef);
+        console.log("Current user presence removed from Firestore.");
+      } catch (error) {
+        console.warn("Error removing user presence:", error);
+      }
+    }
+  }
 
-// ==========================================
-// UI RENDERING
-// ==========================================
-function renderDashboard() {
-    const tasks = AppState.tasks;
-    const columns = AppState.columns;
-    
-    // Update stats
-    const total = tasks.length;
-    const highPriority = tasks.filter(t => t.priority === 'high').length;
-    const completed = tasks.filter(t => {
-        const col = columns.find(c => c.id === t.columnId);
-        return col && col.title.toLowerCase() === 'done';
-    }).length;
-    
-    const today = new Date().toISOString().split('T')[0];
-    const overdue = tasks.filter(t => {
-        if (!t.dueDate) return false;
-        return t.dueDate < today;
-    }).length;
-    
-    // Update DOM
-    const totalEl = document.getElementById('totalTasks');
-    const highEl = document.getElementById('highPriorityTasks');
-    const overdueEl = document.getElementById('overdueTasks');
-    const completedEl = document.getElementById('completedTasks');
-    
-    if (totalEl) totalEl.textContent = total;
-    if (highEl) highEl.textContent = highPriority;
-    if (overdueEl) overdueEl.textContent = overdue;
-    if (completedEl) completedEl.textContent = completed;
-    
-    // Column chart
-    const columnChart = document.getElementById('columnChart');
-    if (columnChart) {
-        columnChart.innerHTML = '';
-        const maxCount = Math.max(...columns.map(c => tasks.filter(t => t.columnId === c.id).length), 1);
-        
-        columns.forEach(col => {
-            const count = tasks.filter(t => t.columnId === col.id).length;
-            const percentage = (count / maxCount) * 100;
-            
-            const stat = document.createElement('div');
-            stat.className = 'column-stat';
-            stat.innerHTML = `
-                <span class="column-name">${escapeHtml(col.title)}</span>
-                <div class="column-bar-bg">
-                    <div class="column-bar-fill" style="width: ${percentage}%"></div>
-                </div>
-                <span class="column-count">${count}</span>
-            `;
-            columnChart.appendChild(stat);
-        });
+  // --- UI Functions (Sidebar, Views, Modals) ---
+  function toggleSidebar(forceClose = false) {
+    // Check if the screen width is considered "small" (e.g., less than 1024px for mobile/tablet)
+    const isSmallScreen = window.innerWidth <= 1024;
+
+    if (isSmallScreen) {
+      if (forceClose || sidebar.classList.contains("open")) {
+        sidebar.classList.remove("open");
+        overlay.classList.remove("active");
+        body.classList.remove("no-scroll");
+      } else {
+        sidebar.classList.add("open");
+        overlay.classList.add("active");
+        body.classList.add("no-scroll");
+      }
+    } else {
+      // For larger screens, sidebar should remain open and not be affected by toggleSidebar(true)
+      // unless explicitly toggled (which doesn't happen with the current calls for board switch)
+      // However, ensuring overlay and no-scroll are managed in case they were set by small screen interaction
+      if (forceClose) {
+        // If forceClose is true, it means we want to ensure it's closed (even if large screen logic usually keeps it open)
+        sidebar.classList.remove("open"); // Ensure it's closed
+        overlay.classList.remove("active");
+        body.classList.remove("no-scroll");
+      }
+      // If it's a large screen and not forced close, leave it as is (likely open)
     }
-    
-    // Priority bars
-    const priorities = ['high', 'medium', 'low'];
-    const totalPrio = tasks.length || 1;
-    
-    priorities.forEach(p => {
-        const count = tasks.filter(t => t.priority === p).length;
-        const bar = document.getElementById(`priority${p.charAt(0).toUpperCase() + p.slice(1)}`);
-        const countEl = document.getElementById(`count${p.charAt(0).toUpperCase() + p.slice(1)}`);
-        
-        if (bar) bar.style.width = `${(count / totalPrio) * 100}%`;
-        if (countEl) countEl.textContent = count;
+  }
+
+  menuToggleBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleSidebar();
+  });
+
+  overlay.addEventListener("click", () => toggleSidebar(true));
+
+  function switchView(viewId, title) {
+    document.querySelectorAll(".view-section").forEach((section) => {
+      section.classList.remove("active");
     });
-    
-    // Recent tasks
-    const recentList = document.getElementById('recentTasksList');
-    if (recentList) {
-        recentList.innerHTML = '';
-        const recent = [...tasks]
-            .sort((a, b) => (b.updatedAt?.toMillis?.() || 0) - (a.updatedAt?.toMillis?.() || 0))
-            .slice(0, 5);
-        
-        recent.forEach(task => {
-            const col = columns.find(c => c.id === task.columnId);
-            const item = document.createElement('div');
-            item.className = 'task-item';
-            item.innerHTML = `
-                <span class="task-priority-dot ${task.priority}"></span>
-                <div class="task-content">
-                    <div class="task-title">${escapeHtml(task.title)}</div>
-                    <div class="task-meta">${col ? escapeHtml(col.title) : 'Unknown'}</div>
-                </div>
-            `;
-            recentList.appendChild(item);
-        });
-    }
-}
+    document.getElementById(viewId).classList.add("active");
 
-function renderBoard(boardId) {
-    const container = document.getElementById('boardContainer');
-    const columns = AppState.columns;
-    const tasks = AppState.tasks;
-    const currentUser = AppState.user;
-    
-    if (!container) return;
-    
-    const addBtn = document.getElementById('addListBtn');
-    container.innerHTML = '';
-    
-    columns.forEach(column => {
-        const columnTasks = tasks
-            .filter(t => t.columnId === column.id)
-            .sort((a, b) => (a.order || 0) - (b.order || 0));
-        
-        const colEl = document.createElement('div');
-        colEl.className = 'kanban-column';
-        colEl.dataset.id = column.id;
-        
-        colEl.innerHTML = `
-            <div class="column-header">
-                <div class="column-title-wrapper">
-                    <input type="text" class="column-title" value="${escapeHtml(column.title)}" 
-                        ${AppState.board?.isOwner ? '' : 'readonly'}>
-                    <span class="task-count">${columnTasks.length}</span>
-                </div>
-                ${AppState.board?.isOwner ? `
-                    <div class="column-actions">
-                        <button class="column-btn delete" data-action="delete-column" data-id="${column.id}" title="Delete column">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
-                            </svg>
+    document.querySelectorAll(".nav-item").forEach((btn) => {
+      btn.classList.remove("active");
+    });
+    document.getElementById(viewId + "Btn").classList.add("active");
+
+    pageTitle.textContent = title;
+    toggleSidebar(true); // Close sidebar after switching views
+  }
+
+  dashboardViewBtn.addEventListener("click", () =>
+    switchView("dashboardView", "Dashboard overview"),
+  );
+  kanbanViewBtn.addEventListener("click", () =>
+    switchView("kanbanView", "Kanban Board"),
+  );
+
+  // --- Task Modal ---
+  function clearModalInputs() {
+    taskNameInput.value = "";
+    taskDescriptionInput.value = "";
+    taskPriorityValue = "low";
+    selectedPriorityText.textContent = "Low";
+    taskPriorityMenu.style.display = "none";
+    taskDueDateInput.value = "";
+    taskLockedMessage.style.display = "none"; // Hide lock message
+    // Re-enable inputs
+    taskNameInput.disabled = false;
+    taskDescriptionInput.disabled = false;
+    priorityDropdownContainer.style.pointerEvents = "auto"; // Re-enable dropdown container
+    taskDueDateInput.disabled = false;
+    saveTaskBtn.disabled = false;
+  }
+
+  function openTaskModal() {
+    if (!boardId) {
+      showCustomModal(
+        "Please create a board or join one first!",
+        "Board required",
+        "alert",
+      );
+      return;
+    }
+    modalTitle.textContent = "Create new task";
+    saveTaskBtn.textContent = "Save task";
+    currentTaskToEditId = null; // Clear task for editing
+    clearModalInputs();
+    taskModal.style.display = "flex";
+    body.classList.add("no-scroll");
+    console.log("Task modal opened for creation.");
+  }
+
+  async function closeTaskModal() {
+    // If a task was being edited, unlock it
+    if (currentTaskToEditId && currentBoardCollaborative) {
+      try {
+        // Check if the task is still locked by the current user before unlocking
+        const taskRef = doc(
+          db,
+          "boards",
+          boardId,
+          "tasks",
+          currentTaskToEditId,
+        );
+        const taskDoc = await getDoc(taskRef);
+        if (taskDoc.exists() && taskDoc.data().lockedBy === userId) {
+          await updateDoc(taskRef, { lockedBy: deleteField() });
+          console.log("Task unlocked:", currentTaskToEditId);
+        } else {
+          console.log(
+            "Task was already unlocked or locked by another user. No action taken.",
+          );
+        }
+      } catch (error) {
+        console.error("Error unlocking task:", error);
+      }
+    }
+    currentTaskToEditId = null;
+    taskModal.style.display = "none";
+    clearModalInputs();
+    body.classList.remove("no-scroll");
+    console.log("Task modal closed.");
+  }
+
+  openModalBtn.addEventListener("click", openTaskModal);
+  taskModal
+    .querySelector(".close-btn")
+    .addEventListener("click", closeTaskModal);
+
+  window.addEventListener("click", async (event) => {
+    if (event.target === taskModal) {
+      await closeTaskModal(); // Ensure task is unlocked if modal is closed by clicking outside
+    }
+    if (event.target === shareModal) closeShareModal();
+    if (event.target === customModal) {
+      customModal.style.display = "none";
+      body.classList.remove("no-scroll");
+    }
+    if (event.target === manageBoardsModal) {
+      // Handle clicking outside manage boards modal
+      manageBoardsModal.style.display = "none";
+      body.classList.remove("no-scroll");
+      if (!boardId) {
+        // If no board is selected, re-open the initial board creation/join modal
+        updateUIForBoardState(false);
+      }
+    }
+    // NEW: Handle clicking outside the new join collaborative board modal
+    if (event.target === joinCollaborativeBoardModal) {
+      closeNewJoinCollaborativeBoardModal();
+    }
+
+    if (!priorityDropdownContainer.contains(event.target)) {
+      taskPriorityMenu.style.display = "none";
+    }
+  });
+
+  taskPriorityDisplay.addEventListener("click", (event) => {
+    event.stopPropagation();
+    // Only allow dropdown if inputs are not disabled (i.e., task is not locked by others)
+    if (!taskNameInput.disabled) {
+      taskPriorityMenu.style.display =
+        taskPriorityMenu.style.display === "block" ? "none" : "block";
+    }
+  });
+
+  document.querySelectorAll(".priority-option").forEach((option) => {
+    option.addEventListener("click", () => {
+      taskPriorityValue = option.dataset.value;
+      selectedPriorityText.textContent = option.textContent;
+      taskPriorityMenu.style.display = "none";
+    });
+  });
+
+  // --- CRUD Operations ---
+  saveTaskBtn.addEventListener("click", async () => {
+    const name = taskNameInput.value.trim();
+    if (name === "") {
+      showCustomModal("Task name cannot be empty!", "Error", "alert");
+      return;
+    }
+
+    const taskData = {
+      name: name,
+      description: taskDescriptionInput.value.trim(),
+      priority: taskPriorityValue,
+      dueDate: taskDueDateInput.value,
+      updatedAt: serverTimestamp(),
+    };
+
+    try {
+      if (currentTaskToEditId) {
+        // Update existing task
+        console.log("Updating task:", currentTaskToEditId, taskData);
+        await updateDoc(
+          doc(db, "boards", boardId, "tasks", currentTaskToEditId),
+          taskData,
+        );
+      } else {
+        // Create new task
+        taskData.status = "todo";
+        taskData.createdAt = serverTimestamp();
+        taskData.owner = userId; // Owner is the creator of the task
+        console.log("Adding new task:", taskData);
+        await addDoc(collection(db, "boards", boardId, "tasks"), taskData);
+      }
+      await closeTaskModal(); // Ensure task is unlocked after saving
+      showCustomModal("Task successfully saved!", "Success", "alert");
+    } catch (error) {
+      console.error("Error saving task: ", error);
+      showCustomModal(
+        "Task could not be saved. Please try again.",
+        "Error",
+        "alert",
+      );
+    }
+  });
+
+  async function openEditModal(event) {
+    const taskId = event.target.closest(".card-action-btn").dataset.id;
+    const task = tasks.find((t) => t.id === taskId);
+
+    if (task) {
+      clearModalInputs(); // Clear first to reset UI state
+
+      // Check if board is collaborative and if task is locked by someone else
+      if (
+        currentBoardCollaborative &&
+        task.lockedBy &&
+        task.lockedBy !== userId
+      ) {
+        taskLockedMessage.textContent = `This task is currently being edited by another user (ID: ${task.lockedBy}).`;
+        taskLockedMessage.style.display = "block";
+        // Disable all inputs and save button
+        taskNameInput.disabled = true;
+        taskDescriptionInput.disabled = true;
+        priorityDropdownContainer.style.pointerEvents = "none"; // Disable dropdown container
+        taskDueDateInput.disabled = true;
+        saveTaskBtn.disabled = true;
+        modalTitle.textContent = "View Task"; // Change title to indicate read-only view
+        saveTaskBtn.textContent = "Locked"; // Change button text
+      } else {
+        // If not locked by others, or if solo board, proceed with editing/locking
+        currentTaskToEditId = taskId;
+        modalTitle.textContent = "Edit Task";
+        saveTaskBtn.textContent = "Save Changes";
+        taskLockedMessage.style.display = "none"; // Ensure hidden
+
+        // Lock the task for current user if collaborative
+        if (currentBoardCollaborative) {
+          try {
+            // Check if the task is already locked by *this* user (e.g., refreshing page)
+            // Or if it's explicitly not locked by anyone
+            if (!task.lockedBy || task.lockedBy === userId) {
+              await updateDoc(doc(db, "boards", boardId, "tasks", taskId), {
+                lockedBy: userId,
+              });
+              console.log("Task locked by current user:", taskId);
+            } else {
+              // This case shouldn't be reached if the initial check worked, but as a safeguard:
+              showCustomModal(
+                "This task is currently being edited by another user and cannot be edited by you.",
+                "Task Locked",
+                "alert",
+              );
+              return;
+            }
+          } catch (error) {
+            console.error("Error locking task:", error);
+            showCustomModal(
+              "Could not lock task for editing. Please try again.",
+              "Error",
+              "alert",
+            );
+            return; // Prevent opening modal if lock fails
+          }
+        }
+      }
+
+      taskNameInput.value = task.name;
+      taskDescriptionInput.value = task.description;
+      taskPriorityValue = task.priority;
+      selectedPriorityText.textContent =
+        task.priority.charAt(0).toUpperCase() + task.priority.slice(1);
+      taskDueDateInput.value = task.dueDate || "";
+
+      taskModal.style.display = "flex";
+      body.classList.add("no-scroll");
+      console.log("Edit task modal opened for task ID:", taskId);
+    }
+  }
+
+  async function deleteTask(event) {
+    const taskId = event.target.closest(".card-action-btn").dataset.id;
+    const task = tasks.find((t) => t.id === taskId);
+
+    if (
+      currentBoardCollaborative &&
+      task.lockedBy &&
+      task.lockedBy !== userId
+    ) {
+      showCustomModal(
+        "This task is currently locked by another user and cannot be deleted.",
+        "Task Locked",
+        "alert",
+      );
+      return;
+    }
+
+    console.log("Delete task button clicked for ID:", taskId);
+    showCustomModal(
+      "Are you sure you want to delete this task?",
+      "Delete Task",
+      "confirm",
+      async (confirmed) => {
+        if (confirmed) {
+          try {
+            console.log("Confirmed delete for task ID:", taskId);
+            await deleteDoc(doc(db, "boards", boardId, "tasks", taskId));
+            showCustomModal("Task successfully deleted!", "Success", "alert");
+          } catch (error) {
+            console.error("Error deleting the task: ", error);
+            showCustomModal(
+              "Task could not be deleted. Please try again.",
+              "Error",
+              "alert",
+            );
+          }
+        } else {
+          console.log("Delete cancelled for task ID:", taskId);
+        }
+      },
+    );
+  }
+
+  // --- Rendering ---
+  function renderTasks() {
+    console.log("Rendering tasks. Total tasks:", tasks.length);
+    // Clear columns before re-drawing
+    Object.values(kanbanColumns).forEach((col) => (col.innerHTML = ""));
+
+    tasks.forEach((task) => {
+      const kanbanCard = document.createElement("div");
+      let cardClasses = `kanban-card priority-${task.priority}`;
+      // Add 'locked' class if the task is locked by another user
+      const isTaskLockedByOther =
+        currentBoardCollaborative && task.lockedBy && task.lockedBy !== userId;
+
+      if (isTaskLockedByOther) {
+        cardClasses += " locked";
+      }
+
+      kanbanCard.className = cardClasses;
+      kanbanCard.setAttribute("draggable", isTaskLockedByOther ? false : true); // Make not draggable if locked by others
+      kanbanCard.setAttribute("data-id", task.id);
+
+      let lockIconHtml = "";
+      if (isTaskLockedByOther) {
+        lockIconHtml = `<img src="lock.svg" alt="Locked" class="lock-icon">`;
+      }
+
+      // Format due date if it exists
+      let dueDateHtml = "";
+      if (task.dueDate) {
+        const dateParts = task.dueDate.split("-"); // Assuming YYYY-MM-DD format
+        const formattedDate = `${dateParts[2]}/${dateParts[1]}/${dateParts[0].substring(2, 4)}`; // DD/MM/YY
+        dueDateHtml = `<div class="due-date-display"><img src="calendar.svg" alt="Due Date" class="calendar-icon"> ${formattedDate}</div>`;
+      }
+
+      kanbanCard.innerHTML = `
+                ${lockIconHtml}
+                <h4>${task.name}</h4>
+                <p>${task.description || ""}</p> <!-- Display full description without truncation -->
+                <div class="card-footer">
+                    ${dueDateHtml}
+                    <div class="card-actions">
+                        <button class="card-action-btn edit-btn" data-id="${task.id}" ${isTaskLockedByOther ? "disabled" : ""}>
+                            <img src="edit-3.svg" alt="Edit">
+                        </button>
+                        <button class="card-action-btn delete-btn" data-id="${task.id}" ${isTaskLockedByOther ? "disabled" : ""}>
+                            <img src="trash-2.svg" alt="Delete">
                         </button>
                     </div>
-                ` : ''}
-            </div>
-            <div class="task-list" data-column-id="${column.id}">
-                ${columnTasks.map(task => {
-                    const locked = task.lockedBy && task.lockedBy !== currentUser?.uid;
-                    const isOverdue = task.dueDate && task.dueDate < new Date().toISOString().split('T')[0];
-                    
-                    return `
-                        <div class="task-card priority-${task.priority} ${locked ? 'locked' : ''}" 
-                             data-id="${task.id}" draggable="${!locked}">
-                            <div class="task-card-header">
-                                <div class="task-card-title">${escapeHtml(task.title)}</div>
-                                ${locked ? `
-                                    <svg class="task-lock-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                                        <path d="M7 11V7a5 5 0 0110 0v4"/>
-                                    </svg>
-                                ` : ''}
-                            </div>
-                            ${task.description ? `<div class="task-card-desc">${escapeHtml(task.description)}</div>` : ''}
-                            <div class="task-card-footer">
-                                <div class="task-card-meta">
-                                    ${task.dueDate ? `
-                                        <span class="task-meta-item ${isOverdue ? 'overdue' : ''}">
-                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
-                                                <line x1="16" y1="2" x2="16" y2="6"/>
-                                                <line x1="8" y1="2" x2="8" y2="6"/>
-                                                <line x1="3" y1="10" x2="21" y2="10"/>
-                                            </svg>
-                                            ${formatDate(task.dueDate)}
-                                        </span>
-                                    ` : ''}
-                                </div>
-                                <div class="task-card-actions">
-                                    <button class="task-action-btn edit" data-action="edit-task" data-id="${task.id}" ${locked ? 'disabled' : ''}>
-                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                            <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
-                                            <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                                        </svg>
-                                    </button>
-                                    <button class="task-action-btn delete" data-action="delete-task" data-id="${task.id}" ${locked ? 'disabled' : ''}>
-                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                            <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
-                                        </svg>
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    `;
-                }).join('')}
-            </div>
-        `;
-        
-        // Column title editing
-        const titleInput = colEl.querySelector('.column-title');
-        if (AppState.board?.isOwner && titleInput) {
-            titleInput.addEventListener('change', async (e) => {
-                try {
-                    await updateColumn(boardId, column.id, { title: e.target.value });
-                } catch (err) {
-                    showToast('Failed to rename column', 'error');
-                }
-            });
-        }
-        
-        container.appendChild(colEl);
-    });
-    
-    if (addBtn) container.appendChild(addBtn);
-}
-
-function updateActiveUsers() {
-    const users = AppState.activeUsers;
-    const countEl = document.getElementById('activeUserCount');
-    const avatarsEl = document.getElementById('userAvatars');
-    const row = document.getElementById('activeUsersRow');
-    
-    if (!AppState.board?.isCollaborative) {
-        if (row) row.style.display = 'none';
-        return;
-    }
-    
-    if (row) row.style.display = 'flex';
-    if (countEl) countEl.textContent = users.length;
-    
-    if (avatarsEl) {
-        avatarsEl.innerHTML = users.slice(0, 3).map((uid, i) => `
-            <div class="user-avatar-small" style="z-index: ${3-i}">
-                ${uid.substring(0, 2).toUpperCase()}
-            </div>
-        `).join('');
-    }
-}
-
-function updateBoardUI() {
-    const board = AppState.board;
-    if (!board) return;
-    
-    const boardIdEl = document.getElementById('boardIdDisplay');
-    const boardTypeEl = document.getElementById('boardTypeDisplay');
-    const shareBtn = document.getElementById('shareBoardBtn');
-    const userIdEl = document.getElementById('userIdDisplay');
-    const avatar = document.getElementById('userAvatar');
-    
-    if (boardIdEl) boardIdEl.textContent = board.id.substring(0, 8) + '...';
-    if (boardTypeEl) boardTypeEl.textContent = board.isCollaborative ? 'Collaborative' : 'Solo';
-    if (shareBtn) shareBtn.style.display = board.isCollaborative ? 'flex' : 'none';
-    if (userIdEl) userIdEl.textContent = AppState.user?.uid.substring(0, 8) + '...';
-    if (avatar) avatar.textContent = AppState.user?.uid.substring(0, 2).toUpperCase();
-}
-
-function showToast(message, type = 'info') {
-    const container = document.getElementById('toastContainer');
-    if (!container) return;
-    
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    
-    const icons = {
-        success: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg>',
-        error: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
-        warning: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
-    };
-    
-    toast.innerHTML = `
-        <span class="toast-icon">${icons[type] || icons.info}</span>
-        <span class="toast-message">${escapeHtml(message)}</span>
-    `;
-    
-    container.appendChild(toast);
-    
-    setTimeout(() => {
-        toast.style.opacity = '0';
-        toast.style.transform = 'translateX(100%)';
-        setTimeout(() => toast.remove(), 300);
-    }, 4000);
-}
-
-function escapeHtml(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-function formatDate(dateStr) {
-    if (!dateStr) return '';
-    const date = new Date(dateStr);
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
-
-// ==========================================
-// MAIN APPLICATION LOGIC
-// ==========================================
-async function init() {
-    log('Starting initialization...');
-    
-    try {
-        // Step 1: Initialize Firebase
-        await initializeFirebase();
-        
-        // Step 2: Initialize Auth
-        await initializeAuth();
-        
-        // Step 3: Setup UI
-        setupEventListeners();
-        setupStateSubscriptions();
-        
-        // Step 4: Check for board in URL
-        const params = new URLSearchParams(window.location.search);
-        const boardId = params.get('board');
-        
-        if (boardId) {
-            log('Found board in URL:', boardId);
-            await loadAndSetupBoard(boardId, true);
-        } else {
-            log('No board in URL, showing board modal');
-            showBoardModal();
-        }
-        
-        log('Initialization complete');
-        
-    } catch (err) {
-        error('Initialization failed:', err);
-        showToast('Failed to start app: ' + err.message, 'error');
-    }
-}
-
-function setupStateSubscriptions() {
-    AppState.subscribe((change, state) => {
-        log('State change:', change);
-        
-        if (change === 'tasks' || change === 'columns') {
-            if (AppState.currentView === 'dashboard') {
-                renderDashboard();
-            } else {
-                renderBoard(state.board?.id);
-            }
-        }
-        
-        if (change === 'activeUsers') {
-            updateActiveUsers();
-        }
-        
-        if (change === 'board') {
-            updateBoardUI();
-        }
-    });
-}
-
-async function loadAndSetupBoard(boardId, isFromURL = false) {
-    log('Loading board:', boardId);
-    
-    try {
-        // Cleanup previous
-        cleanupDrag();
-        if (unsubscribers.tasks) {
-            unsubscribers.tasks();
-            unsubscribers.tasks = null;
-        }
-        
-        // Load board
-        const board = await loadBoard(boardId, isFromURL);
-        
-        // Listen to tasks
-        await listenToTasks(boardId);
-        
-        // Initialize drag and drop
-        await initializeDragAndDrop(boardId);
-        
-        // Switch view
-        switchView('board');
-        
-        showToast('Board loaded successfully', 'success');
-        
-    } catch (err) {
-        error('Failed to load board:', err);
-        showToast(err.message, 'error');
-        
-        if (err.message.includes('Access denied') || err.message.includes('not found')) {
-            // Clear invalid board from URL
-            window.history.pushState({}, '', window.location.pathname);
-            showBoardModal();
-        }
-    }
-}
-
-function setupEventListeners() {
-    // Navigation
-    document.querySelectorAll('.nav-item').forEach(item => {
-        item.addEventListener('click', () => {
-            const view = item.dataset.view;
-            switchView(view);
-        });
-    });
-    
-    // Sidebar
-    document.getElementById('menuToggle')?.addEventListener('click', () => toggleSidebar());
-    document.getElementById('sidebarClose')?.addEventListener('click', () => toggleSidebar(false));
-    document.getElementById('sidebarOverlay')?.addEventListener('click', () => toggleSidebar(false));
-    
-    // Task modal
-    document.getElementById('createTaskBtn')?.addEventListener('click', () => openTaskModal());
-    document.getElementById('closeTaskModal')?.addEventListener('click', closeTaskModal);
-    document.getElementById('cancelTask')?.addEventListener('click', closeTaskModal);
-    document.getElementById('saveTask')?.addEventListener('click', saveTaskHandler);
-    
-    // Priority selection
-    document.querySelectorAll('.priority-option').forEach(btn => {
-        btn.addEventListener('click', () => {
-            document.querySelectorAll('.priority-option').forEach(b => b.classList.remove('selected'));
-            btn.classList.add('selected');
-        });
-    });
-    
-    // Board management
-    document.getElementById('manageBoardsBtn')?.addEventListener('click', showBoardModal);
-    document.getElementById('closeBoardModal')?.addEventListener('click', hideBoardModal);
-    document.getElementById('createSoloBtn')?.addEventListener('click', () => createNewBoard(false));
-    document.getElementById('createCollabBtn')?.addEventListener('click', () => createNewBoard(true));
-    document.getElementById('joinBoardBtn')?.addEventListener('click', joinBoardHandler);
-    
-    // Share
-    document.getElementById('shareBoardBtn')?.addEventListener('click', showShareModal);
-    document.getElementById('closeShareModal')?.addEventListener('click', hideShareModal);
-    document.getElementById('copyLinkBtn')?.addEventListener('click', copyShareLink);
-    
-    // Add list
-    document.getElementById('addListBtn')?.addEventListener('click', addListHandler);
-    
-    // Board container delegation
-    document.getElementById('boardContainer')?.addEventListener('click', handleBoardClick);
-    
-    // Close modals on outside click
-    window.addEventListener('click', (e) => {
-        if (e.target.classList.contains('modal')) {
-            e.target.classList.remove('active');
-        }
-    });
-    
-    // Handle browser back/forward
-    window.addEventListener('popstate', (e) => {
-        const params = new URLSearchParams(window.location.search);
-        const boardId = params.get('board');
-        
-        if (boardId && boardId !== AppState.board?.id) {
-            loadAndSetupBoard(boardId, true);
-        } else if (!boardId && AppState.board) {
-            AppState.setBoard(null);
-            cleanupPresence();
-            showBoardModal();
-        }
-    });
-}
-
-function switchView(view) {
-    AppState.setView(view);
-    
-    // Update nav
-    document.querySelectorAll('.nav-item').forEach(item => {
-        item.classList.toggle('active', item.dataset.view === view);
-    });
-    
-    // Update sections
-    document.querySelectorAll('.view-section').forEach(section => {
-        section.classList.remove('active');
-    });
-    
-    const viewEl = document.getElementById(view + 'View');
-    if (viewEl) viewEl.classList.add('active');
-    
-    // Update title
-    const titles = {
-        dashboard: 'Dashboard',
-        board: AppState.board?.name || 'Board'
-    };
-    const titleEl = document.getElementById('pageTitle');
-    if (titleEl) titleEl.textContent = titles[view];
-    
-    // Render
-    if (view === 'dashboard') {
-        renderDashboard();
-    } else {
-        renderBoard(AppState.board?.id);
-    }
-    
-    // Close sidebar on mobile
-    if (window.innerWidth <= 1024) {
-        toggleSidebar(false);
-    }
-}
-
-function toggleSidebar(forceState) {
-    const sidebar = document.getElementById('sidebar');
-    const overlay = document.getElementById('sidebarOverlay');
-    
-    if (!sidebar) return;
-    
-    const isOpen = sidebar.classList.contains('open');
-    const shouldOpen = forceState !== undefined ? forceState : !isOpen;
-    
-    sidebar.classList.toggle('open', shouldOpen);
-    if (overlay) overlay.classList.toggle('active', shouldOpen);
-}
-
-// Task Modal Functions
-function openTaskModal(taskId = null) {
-    const modal = document.getElementById('taskModal');
-    const title = document.getElementById('modalTitle');
-    const warning = document.getElementById('lockWarning');
-    
-    if (!modal) return;
-    
-    // Populate columns
-    const colSelect = document.getElementById('taskColumn');
-    if (colSelect) {
-        colSelect.innerHTML = AppState.columns.map(c => 
-            `<option value="${c.id}">${escapeHtml(c.title)}</option>`
-        ).join('');
-    }
-    
-    if (taskId) {
-        const task = AppState.tasks.find(t => t.id === taskId);
-        if (!task) return;
-        
-        const isLocked = task.lockedBy && task.lockedBy !== AppState.user?.uid;
-        
-        if (warning) warning.style.display = isLocked ? 'flex' : 'none';
-        
-        const titleInput = document.getElementById('taskTitle');
-        const descInput = document.getElementById('taskDesc');
-        const saveBtn = document.getElementById('saveTask');
-        
-        if (titleInput) {
-            titleInput.value = task.title;
-            titleInput.disabled = isLocked;
-        }
-        if (descInput) {
-            descInput.value = task.description || '';
-            descInput.disabled = isLocked;
-        }
-        if (saveBtn) saveBtn.disabled = isLocked;
-        
-        if (title) title.textContent = isLocked ? 'View Task (Locked)' : 'Edit Task';
-        
-        const dueInput = document.getElementById('taskDue');
-        if (dueInput) dueInput.value = task.dueDate || '';
-        
-        const colInput = document.getElementById('taskColumn');
-        if (colInput) colInput.value = task.columnId;
-        
-        // Set priority
-        document.querySelectorAll('.priority-option').forEach(btn => {
-            btn.classList.toggle('selected', btn.dataset.value === task.priority);
-        });
-        
-        AppState.editingTask = taskId;
-        
-        if (!isLocked) {
-            lockTask(AppState.board.id, taskId).catch(err => {
-                error('Failed to lock task:', err);
-            });
-        }
-    } else {
-        if (title) title.textContent = 'Create Task';
-        if (warning) warning.style.display = 'none';
-        
-        const titleInput = document.getElementById('taskTitle');
-        const descInput = document.getElementById('taskDesc');
-        const dueInput = document.getElementById('taskDue');
-        const saveBtn = document.getElementById('saveTask');
-        
-        if (titleInput) {
-            titleInput.value = '';
-            titleInput.disabled = false;
-        }
-        if (descInput) {
-            descInput.value = '';
-            descInput.disabled = false;
-        }
-        if (dueInput) dueInput.value = '';
-        if (saveBtn) saveBtn.disabled = false;
-        
-        document.querySelectorAll('.priority-option').forEach(btn => {
-            btn.classList.toggle('selected', btn.dataset.value === 'medium');
-        });
-        
-        AppState.editingTask = null;
-    }
-    
-    modal.classList.add('active');
-}
-
-async function closeTaskModal() {
-    const modal = document.getElementById('taskModal');
-    if (modal) modal.classList.remove('active');
-    
-    // Unlock task
-    if (AppState.editingTask && AppState.board) {
-        try {
-            await unlockTask(AppState.board.id, AppState.editingTask);
-        } catch (err) {
-            // Ignore unlock errors
-        }
-    }
-    
-    AppState.editingTask = null;
-}
-
-async function saveTaskHandler() {
-    const titleInput = document.getElementById('taskTitle');
-    const descInput = document.getElementById('taskDesc');
-    const dueInput = document.getElementById('taskDue');
-    const colSelect = document.getElementById('taskColumn');
-    
-    const title = titleInput?.value.trim();
-    if (!title) {
-        showToast('Title is required', 'error');
-        return;
-    }
-    
-    const priority = document.querySelector('.priority-option.selected')?.dataset.value || 'medium';
-    const description = descInput?.value.trim() || '';
-    const dueDate = dueInput?.value || '';
-    const columnId = colSelect?.value;
-    
-    const taskData = {
-        title,
-        description,
-        priority,
-        dueDate,
-        columnId
-    };
-    
-    try {
-        if (AppState.editingTask) {
-            await updateTask(AppState.board.id, AppState.editingTask, taskData, true);
-            showToast('Task updated', 'success');
-        } else {
-            await createTask(AppState.board.id, taskData);
-            showToast('Task created', 'success');
-        }
-        closeTaskModal();
-    } catch (err) {
-        error('Save task failed:', err);
-        showToast(err.message, 'error');
-    }
-}
-
-// Board Management Functions
-async function showBoardModal() {
-    const modal = document.getElementById('boardModal');
-    const grid = document.getElementById('boardsGrid');
-    
-    if (!modal || !grid) return;
-    
-    try {
-        const boards = await fetchUserBoards();
-        
-        grid.innerHTML = boards.map(board => `
-            <div class="glass-card board-card ${board.isCollaborative ? 'collaborative' : 'solo'} ${board.id === AppState.board?.id ? 'active' : ''}" 
-                 data-id="${board.id}">
-                <div class="board-card-title">${escapeHtml(board.name)}</div>
-                <div class="board-card-meta">
-                    <span>${board.isCollaborative ? '👥 Collaborative' : '👤 Solo'}</span>
-                    <span>${board.createdAt ? new Date(board.createdAt.toMillis()).toLocaleDateString() : 'Unknown'}</span>
                 </div>
-                <div class="board-card-actions">
-                    <button class="btn secondary" data-action="load" data-id="${board.id}">Open</button>
-                    <button class="btn danger" data-action="delete-board" data-id="${board.id}">Delete</button>
-                </div>
-            </div>
-        `).join('');
-        
-        // Click handlers
-        grid.querySelectorAll('.board-card').forEach(card => {
-            card.addEventListener('click', async (e) => {
-                if (e.target.closest('button')) return;
-                const id = card.dataset.id;
-                await loadAndSetupBoard(id);
-                hideBoardModal();
-            });
-        });
-        
-    } catch (err) {
-        error('Failed to fetch boards:', err);
-        grid.innerHTML = '<p style="color: var(--text-muted);">Failed to load boards</p>';
+            `;
+
+      kanbanCard.addEventListener("dragstart", dragStart);
+      kanbanCard.addEventListener("dragend", dragEnd);
+
+      if (kanbanColumns[task.status]) {
+        kanbanColumns[task.status].appendChild(kanbanCard);
+      }
+    });
+
+    // Add event listeners to new buttons (ensure existing ones are removed by innerHTML clearing)
+    document
+      .querySelectorAll(".edit-btn")
+      .forEach((button) => button.addEventListener("click", openEditModal));
+    document
+      .querySelectorAll(".delete-btn")
+      .forEach((button) => button.addEventListener("click", deleteTask));
+
+    renderDashboardSummary();
+  }
+
+  function renderDashboardSummary() {
+    const today = new Date().toISOString().split("T")[0];
+    const totalCount = tasks.length;
+    const todoCount = tasks.filter((task) => task.status === "todo").length;
+    const inProgressCount = tasks.filter(
+      (task) => task.status === "inprogress",
+    ).length;
+    const doneCount = tasks.filter((task) => task.status === "done").length;
+    const highPriorityCount = tasks.filter(
+      (task) => task.priority === "high",
+    ).length;
+    const overdueCount = tasks.filter(
+      (task) => task.status !== "done" && task.dueDate && task.dueDate < today,
+    ).length;
+
+    totalCountElement.textContent = totalCount;
+    todoCountElement.textContent = todoCount;
+    inProgressCountElement.textContent = inProgressCount;
+    doneCountElement.textContent = doneCount;
+    highPriorityCountElement.textContent = highPriorityCount;
+    overdueCountElement.textContent = overdueCount;
+
+    const completionRate =
+      totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0;
+    completionBar.style.width = `${completionRate}%`;
+    completionText.textContent = `${completionRate}% Completed`;
+
+    const highPriorityPercentage =
+      totalCount > 0 ? (highPriorityCount / totalCount) * 100 : 0;
+    const mediumPriorityPercentage =
+      totalCount > 0
+        ? (tasks.filter((task) => task.priority === "medium").length /
+            totalCount) *
+          100
+        : 0;
+    const lowPriorityPercentage =
+      totalCount > 0
+        ? (tasks.filter((task) => task.priority === "low").length /
+            totalCount) *
+          100
+        : 0;
+
+    highPriorityBar.style.width = `${highPriorityPercentage}%`;
+    mediumPriorityBar.style.width = `${mediumPriorityPercentage}%`;
+    lowPriorityBar.style.width = `${lowPriorityPercentage}%`;
+  }
+
+  // --- Drag & Drop ---
+  let draggedTaskKanban = null;
+
+  function dragStart(event) {
+    const taskId = event.target.dataset.id;
+    const task = tasks.find((t) => t.id === taskId);
+
+    // Prevent dragging if task is locked by another user on a collaborative board
+    if (
+      currentBoardCollaborative &&
+      task.lockedBy &&
+      task.lockedBy !== userId
+    ) {
+      event.preventDefault();
+      showCustomModal(
+        "This task is currently locked by another user and cannot be moved.",
+        "Task Locked",
+        "alert",
+      );
+      return;
     }
-    
-    modal.classList.add('active');
-}
 
-function hideBoardModal() {
-    const modal = document.getElementById('boardModal');
-    if (modal) modal.classList.remove('active');
-}
+    draggedTaskKanban = event.target;
+    setTimeout(() => draggedTaskKanban.classList.add("dragging"), 0);
+    event.dataTransfer.setData("text/plain", taskId);
+    console.log("Drag started for task ID:", taskId);
+  }
 
-async function createNewBoard(isCollaborative) {
+  function dragEnd() {
+    if (draggedTaskKanban) {
+      draggedTaskKanban.classList.remove("dragging");
+    }
+    draggedTaskKanban = null;
+    console.log("Drag ended.");
+  }
+
+  window.dragOver = function (event) {
+    event.preventDefault();
+  };
+
+  window.drop = async function (event, newStatus) {
+    event.preventDefault();
+    const taskId = event.dataTransfer.getData("text/plain");
+    console.log(`Drop event: Task ID ${taskId} to new status ${newStatus}`);
+    const taskRef = doc(db, "boards", boardId, "tasks", taskId);
+
+    const task = tasks.find((t) => t.id === taskId);
+    // Prevent dropping if task is locked by another user on a collaborative board
+    if (
+      currentBoardCollaborative &&
+      task.lockedBy &&
+      task.lockedBy !== userId
+    ) {
+      showCustomModal(
+        "This task is currently locked by another user and cannot be moved.",
+        "Task Locked",
+        "alert",
+      );
+      return;
+    }
+
+    const updateData = { status: newStatus };
+
+    if (newStatus === "done") {
+      updateData.completionDate = new Date().toISOString().split("T")[0];
+      console.log("Setting completionDate for 'done' status.");
+    } else {
+      // Explicitly clear completion date if not 'done'
+      updateData.completionDate = deleteField();
+      console.log("Removing completionDate as status is not 'done'.");
+    }
+
     try {
-        const name = isCollaborative ? 
-            prompt('Enter board name:') || `Collaborative Board ${new Date().toLocaleDateString()}` :
-            null;
-            
-        const boardId = await createBoard(isCollaborative, name);
-        await loadAndSetupBoard(boardId);
-        hideBoardModal();
-        showToast('Board created successfully', 'success');
-    } catch (err) {
-        if (err.message === 'You already have a solo board') {
-            showToast('You already have a solo board. Find it in Manage Boards.', 'warning');
-        } else {
-            error('Create board failed:', err);
-            showToast(err.message, 'error');
-        }
+      await updateDoc(taskRef, updateData);
+      console.log("Task status updated successfully in Firestore.");
+    } catch (error) {
+      console.error("Error updating task status:", error);
+      showCustomModal(
+        "Task could not be moved. Please try again.",
+        "Error",
+        "alert",
+      );
     }
-}
+  };
 
-async function joinBoardHandler() {
-    const input = document.getElementById('joinBoardId');
-    const boardId = input?.value.trim();
-    
+  // --- Share Functionality ---
+  function openShareModal() {
+    console.log("Share button clicked. Current board ID:", boardId);
     if (!boardId) {
-        showToast('Please enter a board ID', 'error');
-        return;
+      showCustomModal(
+        "Create a board or join one to share it.",
+        "Board not active",
+        "alert",
+      );
+      return;
     }
-    
-    try {
-        await loadAndSetupBoard(boardId, true);
-        hideBoardModal();
-        if (input) input.value = '';
-    } catch (err) {
-        showToast('Failed to join board: ' + err.message, 'error');
+    if (!currentBoardCollaborative) {
+      showCustomModal(
+        "This is a solo board and cannot be shared. Please create a collaborative board if you wish to share.",
+        "Sharing Not Allowed",
+        "alert",
+      );
+      return;
     }
-}
 
-// Share Functions
-function showShareModal() {
-    const modal = document.getElementById('shareModal');
-    if (!modal || !AppState.board) return;
-    
-    const link = `${window.location.origin}${window.location.pathname}?board=${AppState.board.id}`;
-    
-    const linkInput = document.getElementById('shareLink');
-    const idDisplay = document.getElementById('shareBoardId');
-    
-    if (linkInput) linkInput.value = link;
-    if (idDisplay) idDisplay.textContent = AppState.board.id;
-    
-    modal.classList.add('active');
-}
+    const link = `${window.location.origin}${window.location.pathname}?board=${boardId}`;
+    shareableLinkInput.value = link;
+    shareableBoardIdInput.value = boardId;
+    shareModal.style.display = "flex";
+    console.log("Share modal opened. Link:", link);
+  }
 
-function hideShareModal() {
-    const modal = document.getElementById('shareModal');
-    if (modal) modal.classList.remove('active');
-}
+  function closeShareModal() {
+    shareModal.style.display = "none";
+    console.log("Share modal closed.");
+  }
 
-async function copyShareLink() {
-    const input = document.getElementById('shareLink');
-    if (!input) return;
-    
-    input.select();
-    
-    try {
-        await navigator.clipboard.writeText(input.value);
-        showToast('Link copied to clipboard', 'success');
-    } catch (err) {
-        document.execCommand('copy');
-        showToast('Link copied', 'success');
-    }
-}
+  shareBoardBtn.addEventListener("click", openShareModal);
+  closeShareModalBtn.addEventListener("click", closeShareModal);
 
-// Column Management
-async function addListHandler() {
-    if (!AppState.board?.isOwner) {
-        showToast('Only board owner can add columns', 'error');
-        return;
-    }
-    
-    const title = prompt('Enter list name:');
-    if (!title?.trim()) return;
-    
-    try {
-        await createColumn(AppState.board.id, title.trim());
-        showToast('List created', 'success');
-    } catch (err) {
-        showToast(err.message, 'error');
-    }
-}
-
-// Event Delegation Handler
-async function handleBoardClick(e) {
-    const target = e.target.closest('[data-action]');
-    if (!target) return;
-    
-    const action = target.dataset.action;
-    const id = target.dataset.id;
-    
-    switch (action) {
-        case 'edit-task':
-            openTaskModal(id);
-            break;
-            
-        case 'delete-task':
-            if (!confirm('Delete this task?')) return;
-            try {
-                await deleteTask(AppState.board.id, id);
-                showToast('Task deleted', 'success');
-            } catch (err) {
-                showToast(err.message, 'error');
-            }
-            break;
-            
-        case 'delete-column':
-            if (!confirm('Delete this list? All tasks in it will be permanently deleted.')) return;
-            try {
-                await deleteColumn(AppState.board.id, id);
-                showToast('List deleted', 'success');
-            } catch (err) {
-                if (err.message.includes('contains tasks')) {
-                    showToast('Move or delete all tasks in this list first', 'warning');
-                } else {
-                    showToast(err.message, 'error');
-                }
-            }
-            break;
-            
-        case 'load':
-            await loadAndSetupBoard(id);
-            hideBoardModal();
-            break;
-            
-        case 'delete-board':
-            if (!confirm('Permanently delete this board and all its data?')) return;
-            try {
-                await deleteBoard(id);
-                if (AppState.board?.id === id) {
-                    cleanupPresence();
-                    AppState.setBoard(null);
-                    showBoardModal();
-                } else {
-                    showBoardModal(); // Refresh list
-                }
-                showToast('Board deleted', 'success');
-            } catch (err) {
-                showToast(err.message, 'error');
-            }
-            break;
-    }
-}
-
-// Start the app
-document.addEventListener('DOMContentLoaded', init);
+  copyLinkBtn.addEventListener("click", () => {
+    shareableLinkInput.select();
+    document.execCommand("copy");
+    copyLinkBtn.textContent = "Copied!";
+    console.log("Share link copied to clipboard.");
+    setTimeout(() => {
+      copyLinkBtn.textContent = "Copy Link";
+    }, 2000);
+  });
+});
